@@ -1,0 +1,130 @@
+# llm-harness-server — Repository Structure
+
+```
+llm-harness-server/
+├── .claude/                           # ← how Claude Code picks this project up
+│   ├── rules/                         # path-scoped; load when matching files are opened
+│   │   ├── streaming.md               # the four anti-buffering defences
+│   │   └── process-safety.md          # one vLLM, kill the group, free the VRAM
+│   ├── settings.json                  # committed: allowed/denied tool permissions
+│   └── settings.local.json            # gitignored: personal overrides
+│
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug.yml
+│   │   └── task.yml
+│   ├── pull_request_template.md
+│   └── workflows/
+│       ├── ci.yml                     # ruff → mypy → pytest (no GPU needed; vLLM is mocked)
+│       └── shellcheck.yml             # lint every script in scripts/
+│
+├── docs/
+│   ├── SPEC.md                        # ← the MVP spec
+│   ├── API-CONTRACT.md                # ← identical copy of the shared contract
+│   ├── DEPLOY.md                      # runbook: provision, rotate key, add a model, tear down
+│   ├── OPERATIONS.md                  # troubleshooting: OOM, stuck load, orphan GPU process
+│   ├── BACKLOG.md
+│   └── adr/
+│       ├── 0001-vllm-over-ollama.md
+│       ├── 0002-single-model-supervisor.md
+│       ├── 0003-subprocess-not-systemd-template.md
+│       ├── 0004-api-key-auth-for-mvp.md
+│       └── 0005-no-crash-loop-restart.md
+│
+├── src/
+│   └── harness_control/
+│       ├── __init__.py
+│       ├── __main__.py                # python -m harness_control (dev entrypoint)
+│       ├── app.py                     # FastAPI factory + lifespan
+│       ├── settings.py                # pydantic-settings, all HARNESS_* env vars
+│       ├── auth.py                    # bearer dependency, constant-time compare
+│       ├── errors.py                  # ErrorCode enum + exception → contract envelope
+│       ├── models.py                  # pydantic schemas for every request/response body
+│       ├── catalog.py                 # models.yaml loader + ModelSpec + validation
+│       ├── supervisor/
+│       │   ├── __init__.py
+│       │   ├── state.py               # the state enum + transition guards
+│       │   ├── supervisor.py          # activate(), watchdog, activation lock
+│       │   ├── process.py             # spawn/terminate a vLLM process group safely
+│       │   ├── readiness.py           # poll vLLM /health with timeout
+│       │   ├── gpu.py                 # nvidia-smi parsing, wait_for_vram_release()
+│       │   └── jobs.py                # in-memory job registry (+ last 20 on disk)
+│       ├── routes/
+│       │   ├── __init__.py
+│       │   ├── health.py              # GET /healthz  (unauthenticated)
+│       │   ├── openai.py              # GET /v1/models, POST /v1/chat/completions
+│       │   └── admin.py               # /admin/models, /admin/state, /admin/jobs, /admin/logs
+│       ├── proxy.py                   # streaming relay, abort propagation
+│       ├── logbuf.py                  # bounded ring buffer fed by the vLLM pipes
+│       └── logging_config.py          # JSON logs + API-key redaction filter
+│
+├── tests/
+│   ├── conftest.py                    # app fixture with a FakeSupervisor
+│   ├── fake_vllm.py                   # aiohttp/uvicorn stub: /health, /v1/*, SSE frames
+│   ├── test_auth.py
+│   ├── test_catalog.py
+│   ├── test_state_machine.py          # every legal + illegal transition
+│   ├── test_supervisor_activate.py    # drain, timeout, concurrent activate → 409
+│   ├── test_proxy_streaming.py        # asserts chunks arrive incrementally, not batched
+│   ├── test_proxy_abort.py            # client disconnect cancels upstream
+│   ├── test_admin_routes.py
+│   ├── test_errors_contract.py        # every error code matches the contract table
+│   └── test_redaction.py              # the API key never reaches a log record
+│
+├── deploy/
+│   ├── caddy/
+│   │   └── Caddyfile.template
+│   ├── systemd/
+│   │   └── harness-control.service
+│   ├── config/
+│   │   ├── models.yaml                # the MVP catalog (GLM 4.7 Flash + Qwen 3.8 27B)
+│   │   └── harness.env.example
+│   └── logrotate/
+│       └── harness
+│
+├── scripts/
+│   ├── provision.sh                   # one-shot fresh-VM setup (idempotent)
+│   ├── install-nvidia.sh              # driver + CUDA, skipped if nvidia-smi already works
+│   ├── mount-data-disk.sh             # format + fstab by UUID → /mnt/models
+│   ├── download-models.sh             # hf download every repo in models.yaml
+│   ├── rotate-key.sh                  # generate + install a new API key
+│   ├── smoke.sh                       # curl-based end-to-end check (health, auth, stream, switch)
+│   ├── vm-start.sh                    # az vm start
+│   ├── vm-stop.sh                     # az vm deallocate  ← the money saver
+│   └── tail-logs.sh
+│
+├── .dockerignore
+├── .env.example
+├── .gitignore
+├── .python-version                    # 3.12
+├── CHANGELOG.md
+├── CLAUDE.md                          # ← instructions for Claude working in this repo
+├── LICENSE
+├── Makefile                           # dev, test, lint, fmt, smoke
+├── README.md
+├── pyproject.toml                     # ruff + mypy + pytest config, project metadata
+└── requirements.lock                  # pinned, incl. the exact vLLM version
+```
+
+## Build order
+
+1. `settings.py`, `errors.py`, `models.py`, `catalog.py` — config and vocabulary, fully tested
+2. `supervisor/state.py` + `test_state_machine.py` — the state machine on its own, no I/O
+3. `supervisor/process.py`, `gpu.py`, `readiness.py` — the OS-facing parts, tested against `fake_vllm`
+4. `supervisor/supervisor.py` — wire it together
+5. `routes/` + `proxy.py` — HTTP surface; `test_proxy_streaming.py` is the one that catches buffering
+6. `deploy/` + `scripts/` — provisioning last, once there is something to provision
+
+`tests/fake_vllm.py` means the entire test suite runs on GitHub Actions with no
+GPU. Nothing in `tests/` may require CUDA.
+
+## Conventions
+
+- `ruff` (lint + format) and `mypy --strict` both clean; CI fails otherwise
+- Every route returns the contract's error envelope — never FastAPI's default
+  `{"detail": ...}`. A custom exception handler enforces this, and
+  `test_errors_contract.py` asserts it for every code.
+- No blocking calls in async paths: `nvidia-smi` and process waits go through
+  `asyncio.create_subprocess_exec` / `run_in_executor`
+- Shell scripts: `set -euo pipefail`, `shellcheck` clean, safe to re-run
+- Secrets come from the environment only. No key, token, or hostname is committed.
