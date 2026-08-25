@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # No GPU, and none needed: tests/fake_vllm.py stands in for vLLM.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      # `make lint` and `make test` build .venv themselves from pyproject.toml,
+      # so CI runs exactly what a developer runs. requirements.lock is the VM's
+      # install (it carries vLLM and CUDA wheels) and is deliberately not used here.
+      - name: Lint, format, and typecheck
+        run: make lint
+
+      - name: Test
+        run: make test
