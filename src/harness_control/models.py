@@ -20,10 +20,17 @@ LogSource = Literal["vllm", "control"]
 
 
 class HealthResponse(BaseModel):
-    """`GET /healthz`. Never reveals model or key information (contract §3)."""
+    """`GET /healthz`. Never reveals model or key information (contract §3).
+
+    Two versions, and they are not interchangeable. `version` is the API contract
+    version this server implements — the desktop app compares it for
+    compatibility. `service_version` is the build, for debugging only; clients
+    MUST NOT branch on it.
+    """
 
     status: Literal["ok"] = "ok"
     version: str
+    service_version: str
     uptime_s: int
 
 
@@ -99,7 +106,7 @@ class CatalogEntry(BaseModel):
     params: str | None = None
     quantization: str | None = None
     context_length: int | None = None
-    downloaded: bool = False
+    available: bool = False
     state: ModelState
     estimated_load_seconds: int
 

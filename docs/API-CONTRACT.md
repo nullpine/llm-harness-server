@@ -1,4 +1,4 @@
-# LLM Harness — API Contract v1
+# LLM Harness — API Contract v1.1
 
 **Status:** normative for MVP. Both `llm-harness-desktop` and `llm-harness-server` MUST conform.
 **Owner of truth:** this file is committed to **both** repos at `docs/API-CONTRACT.md`. Any change is a PR in both, and bumps the version at the top.
@@ -107,8 +107,12 @@ data: [DONE]
 - Server MUST set `Cache-Control: no-cache`, `X-Accel-Buffering: no`, `Connection: keep-alive`.
 - Server MUST NOT buffer; it streams chunks through as they arrive.
 - Client disconnect MUST cancel the upstream vLLM request (abort propagation).
-- Reasoning models may emit `delta.reasoning_content`. Clients MUST tolerate it;
-  MVP desktop renders it in a collapsed "Thinking" block.
+- Reasoning models may emit `delta.reasoning_content` (vLLM) or `delta.reasoning`
+  (Ollama). Clients MUST tolerate both; MVP desktop renders either in a collapsed
+  Thinking block.
+- Frames are relayed verbatim, so `model` in a chunk carries the engine's own name
+  for the model, not the catalog id the client requested. Clients MUST correlate
+  responses by their own request, never by the frame's `model` field.
 
 ---
 
@@ -117,8 +121,12 @@ data: [DONE]
 ### `GET /healthz` — unauthenticated
 
 ```json
-{ "status": "ok", "version": "0.1.0", "uptime_s": 1234 }
+{ "status": "ok", "version": "1.1", "service_version": "0.1.0", "uptime_s": 1234 }
 ```
+
+`version` is the API contract version the server implements — clients compare this
+for compatibility. `service_version` is the server build, for debugging only;
+clients MUST NOT branch on it.
 
 Used by Caddy/Azure health probes. Never reveals model or key info.
 
@@ -134,28 +142,33 @@ The full catalog from `models.yaml`, annotated with live state.
     {
       "id": "glm-4.7-flash",
       "display_name": "GLM 4.7 Flash",
-      "hf_repo": "zai-org/GLM-4.7-Flash",
+      "model_ref": "glm-4.7-flash:q4_K_M",
       "params": "30B-A3B (MoE)",
-      "quantization": "fp8",
-      "context_length": 131072,
-      "downloaded": true,
+      "quantization": "q4_K_M",
+      "context_length": 32768,
+      "available": true,
       "state": "ready",
-      "estimated_load_seconds": 75
+      "estimated_load_seconds": 25
     },
     {
       "id": "qwen3.8-27b",
       "display_name": "Qwen 3.8 27B",
-      "hf_repo": "Qwen/Qwen3.8-27B-FP8",
+      "model_ref": "Qwen/Qwen3.8-27B-FP8",
       "params": "27B (dense, VL)",
       "quantization": "fp8",
       "context_length": 262144,
-      "downloaded": true,
+      "available": true,
       "state": "idle",
       "estimated_load_seconds": 110
     }
   ]
 }
 ```
+
+`model_ref` is backend-specific — an Ollama tag, a Hugging Face repo, or a provider
+model string. Clients MUST treat it as opaque.
+
+`available` means the backend can serve this model without a fetch.
 
 ### `GET /admin/state`
 
