@@ -121,3 +121,7 @@ Kept here so it stays out of the MVP. Roughly in the order it will matter.
     API-CONTRACT.md against its own stamp, which catches a local edit that skipped
     re-stamping but not divergence between the repos. A CI step fetching the other
     repo's `.api-contract.sha256` and comparing would close it.
+15. Derive the contract instead of duplicating it. FastAPI emits OpenAPI from the
+    route definitions; publish that and generate the desktop's types from it. Replaces
+    the byte-identical API-CONTRACT.md copies and their hash stamps — drift becomes
+    impossible rather than merely detected, and a field rename becomes one PR.
