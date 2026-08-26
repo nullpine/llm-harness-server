@@ -151,6 +151,11 @@ models:
 backend: an Ollama tag, a Hugging Face repo, or a provider's model string.
 `args` stays, and is passed through only by backends that can use it (`vllm`).
 
+**Invariant: `model_ref` must be exactly what the backend serves the model under.**
+The proxy addresses upstreams by `model_ref`, so anything that changes the engine's
+served name — `--served-model-name` for vLLM, a retag for Ollama — must change
+`model_ref` to match, or the proxy 404s.
+
 **`estimated_load_seconds` is per-backend.** Ollama loading 18 GB from local SSD is
 10–30 s; vLLM cold-starting the same model on an H100 is 60–120 s. The number the
 desktop app shows in its switch dialog comes from here, so it must be honest for
