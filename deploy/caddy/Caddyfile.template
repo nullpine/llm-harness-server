@@ -1,0 +1,35 @@
+# Caddyfile for the LLM Harness control plane.
+# `scripts/provision.sh` substitutes {{HOST}} and installs this as /etc/caddy/Caddyfile.
+#
+# Not used on the local MVP path (SPEC §4.3) — there is no TLS on 127.0.0.1 — but
+# it is one of the four anti-buffering defences, so it is asserted by
+# tests/test_proxy_streaming.py and must stay correct.
+
+{{HOST}} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	# /v1/* is the streaming path and is matched FIRST, before `encode`.
+	# `flush_interval -1` disables response buffering entirely; without it Caddy
+	# holds SSE frames and the client sees one blob at the end.
+	# Compression must not apply here either — see .claude/rules/streaming.md.
+	@stream path /v1/*
+	reverse_proxy @stream 127.0.0.1:8080 {
+		flush_interval -1
+		transport http {
+			response_header_timeout 300s
+		}
+	}
+
+	# Everything else: /healthz and /admin/*. Small JSON bodies, safe to compress.
+	@rest not path /v1/*
+	encode @rest zstd gzip
+	reverse_proxy @rest 127.0.0.1:8080
+
+	log {
+		output file /var/log/caddy/harness.log
+	}
+}

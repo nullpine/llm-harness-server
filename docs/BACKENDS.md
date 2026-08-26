@@ -46,7 +46,14 @@ class Backend(Protocol):
 
     async def resources(self) -> list[ResourceInfo]:
         """GPU/accelerator state. May be empty — that is valid."""
+
+    async def aclose(self) -> None:
+        """Release transport resources (HTTP clients, pipes). Idempotent."""
 ```
+
+`aclose()` is not `stop()`. `stop()` unloads the model; `aclose()` releases what the
+backend object itself holds. The supervisor calls it whenever it discards a backend,
+which is every activation — without it each model switch leaks a connection pool.
 
 The **supervisor keeps everything else**: the state machine, the activation lock,
 the drain, the job registry, the watchdog. A backend never decides state; it only
@@ -78,6 +85,17 @@ daemon, not just in our supervisor.
 Also relevant: `OLLAMA_KEEP_ALIVE` sets the global default, but the per-request
 `keep_alive` we send overrides it. We always send it explicitly rather than relying
 on daemon config.
+
+**The proxy addresses the engine by `model_ref`, not by our catalog id.** A client
+asks for `glm-4.7-flash`; Ollama only answers to `glm-4.7-flash:q4_K_M` and 404s on
+anything else. `proxy.py` substitutes `supervisor.active_model_ref` into the outgoing
+request body — backend-agnostically, since `model_ref` is by definition the name the
+engine knows. Response frames therefore carry the *engine's* name
+(`"model":"glm-4.7-flash:q4_K_M"`), not ours. That is deliberate and permanent:
+rewriting frames on the way out would mean parsing and re-serialising the SSE stream,
+which is exactly the buffering `aiter_raw()` exists to prevent
+(`.claude/rules/streaming.md`). Clients key off the request they made, not off the
+frame. This is also why no backend passes `--served-model-name` to rename itself back.
 
 **Not supported by Ollama:** `logprobs`, `logit_bias`, `n`, `tool_choice`. None are
 used by the MVP. Tool calling is post-MVP and will need `vllm` or `remote_openai`.
@@ -133,6 +151,11 @@ models:
 backend: an Ollama tag, a Hugging Face repo, or a provider's model string.
 `args` stays, and is passed through only by backends that can use it (`vllm`).
 
+**Invariant: `model_ref` must be exactly what the backend serves the model under.**
+The proxy addresses upstreams by `model_ref`, so anything that changes the engine's
+served name — `--served-model-name` for vLLM, a retag for Ollama — must change
+`model_ref` to match, or the proxy 404s.
+
 **`estimated_load_seconds` is per-backend.** Ollama loading 18 GB from local SSD is
 10–30 s; vLLM cold-starting the same model on an H100 is 60–120 s. The number the
 desktop app shows in its switch dialog comes from here, so it must be honest for
@@ -158,7 +181,7 @@ Start this before you need it.
 |---|---|
 | 1 | Run `scripts/provision.sh --host harness.example.com` on the VM. It installs vLLM, Caddy, the systemd unit, and downloads weights |
 | 2 | In `models.yaml`: `backend: vllm`, and `model_ref` becomes the HF repo (`zai-org/GLM-4.7-Flash`) |
-| 3 | Restore `args:` per model — `--tool-call-parser=glm47`, `--reasoning-parser=glm45`, `--served-model-name` |
+| 3 | Restore `args:` per model — `--tool-call-parser=glm47`, `--reasoning-parser=glm45`. Not `--served-model-name`: the proxy addresses vLLM by `model_ref`, so renaming it back would 404 (§2.1) |
 | 4 | Raise `estimated_load_seconds` to the vLLM figures (75 / 110) |
 | 5 | In the desktop app's Settings, change Server URL from `http://localhost:8080` to `https://harness.example.com`, and paste the API key `provision.sh` printed |
 

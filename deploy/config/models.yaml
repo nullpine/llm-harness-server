@@ -1,0 +1,15 @@
+# The MVP catalog. One model until M2 builds switching — see docs/BACKLOG.md.
+# `model_ref` is the Ollama tag here; on the `vllm` backend it becomes the HF repo
+# and `estimated_load_seconds` roughly triples (docs/BACKENDS.md §3).
+defaults:
+  backend: ollama
+
+models:
+  - id: glm-4.7-flash
+    display_name: GLM 4.7 Flash
+    backend: ollama
+    model_ref: glm-4.7-flash:q4_K_M
+    params: 30B-A3B (MoE)
+    quantization: q4_K_M
+    context_length: 32768
+    estimated_load_seconds: 25
