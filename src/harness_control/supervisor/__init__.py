@@ -1,1 +1,1 @@
-"""The supervisor: owns the single vLLM process and the activation lock."""
+"""Model supervision: the state machine, the activation lock, and the backends."""

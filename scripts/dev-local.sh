@@ -9,7 +9,7 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 MODELS_FILE="${HARNESS_MODELS_FILE:-deploy/config/models.yaml}"
-ENV_FILE="$REPO_ROOT/.env"
+ENV_FILE="$REPO_ROOT/.env.local"
 RUN_DIR="$REPO_ROOT/.local"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 CONTROL_HOST="127.0.0.1"
@@ -85,7 +85,8 @@ else
 fi
 
 # ---------------------------------------------------------------- 4. the key
-# Generated once into .env, which is gitignored. Never committed, never logged.
+# Generated once into .env.local, which is gitignored. Never committed, never
+# logged — logging_config.py's redaction filter scrubs it from every record.
 if [ -f "$ENV_FILE" ]; then
 	# shellcheck disable=SC1090  # runtime path, not resolvable at lint time
 	set -a && . "$ENV_FILE" && set +a
@@ -94,7 +95,7 @@ if [ -z "${HARNESS_API_KEY:-}" ]; then
 	HARNESS_API_KEY="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 	printf 'HARNESS_API_KEY=%s\n' "$HARNESS_API_KEY" >>"$ENV_FILE"
 	chmod 600 "$ENV_FILE"
-	log "generated a new API key into .env"
+	log "generated a new API key into .env.local"
 fi
 export HARNESS_API_KEY
 
@@ -107,18 +108,23 @@ fi
 
 export HARNESS_DEFAULT_BACKEND=ollama
 export HARNESS_MODELS_FILE="$MODELS_FILE"
-export HARNESS_OLLAMA_BASE_URL="http://127.0.0.1:${OLLAMA_PORT}"
+export HARNESS_OLLAMA_URL="http://127.0.0.1:${OLLAMA_PORT}"
 
 first_model="$(sed -n 's/^[[:space:]]*-[[:space:]]*id:[[:space:]]*\([^[:space:]#]*\).*/\1/p' \
 	"$MODELS_FILE" 2>/dev/null | head -n1)"
 first_model="${first_model:-glm-4.7-flash}"
+
+# M1 loads one model at startup and serves it; switching is M2. Without this the
+# control plane comes up `idle` and every /v1 call is a 409.
+export HARNESS_AUTOLOAD_MODEL="${HARNESS_AUTOLOAD_MODEL:-$first_model}"
 
 cat <<EOF
 
   control plane  http://${CONTROL_HOST}:${CONTROL_PORT}
   backend        ollama  →  http://127.0.0.1:${OLLAMA_PORT}
   catalog        ${MODELS_FILE}
-  API key        ${HARNESS_API_KEY}
+  autoload       ${HARNESS_AUTOLOAD_MODEL}
+  API key        ${HARNESS_API_KEY}   (also in .env.local)
 
   Streaming smoke test (SPEC §7.1 L3) — paste into another terminal:
 

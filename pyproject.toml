@@ -92,6 +92,8 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
+# tests/ is on sys.path so `from fake_upstream import ...` works without a package.
+pythonpath = ["tests"]
 addopts = "-q --strict-markers --strict-config"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
