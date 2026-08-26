@@ -32,7 +32,9 @@ item you are working on.**
 1. **The scope in `docs/SPEC.md` §3 is closed.** If a task appears to need
    something on the non-goals list, stop and say so instead of building it.
 2. **Exactly one vLLM process may exist.** Every code path that spawns or kills it
-   goes through `supervisor/process.py`. No `subprocess.Popen` anywhere else.
+   goes through `supervisor/backends/vllm.py` (ADR-0007 moved it there from the
+   old `supervisor/process.py`). No `subprocess.Popen` or
+   `asyncio.create_subprocess_exec` anywhere else in the package.
 3. **Never edit `docs/API-CONTRACT.md` unilaterally.** It is byte-identical to the
    copy in the desktop repo. A change means a PR in both, and a version bump.
 4. **Every error response uses the contract envelope**, never FastAPI's default

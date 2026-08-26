@@ -24,7 +24,6 @@ __all__ = [
     "UnknownBackendError",
     "VllmBackend",
     "backend_names",
-    "close_backend",
     "create_backend",
 ]
 
@@ -63,18 +62,3 @@ def create_backend(name: str, settings: Settings) -> Backend:
     if factory is None:
         raise UnknownBackendError(f"unknown backend {name!r}; known backends: {backend_names()}")
     return factory(settings)
-
-
-async def close_backend(backend: Backend | None) -> None:
-    """Release whatever transport resources a backend holds.
-
-    `aclose()` is deliberately **not** on the Protocol: `docs/BACKENDS.md` §1 is the
-    interface and it is not this module's to extend. Every implementation here owns
-    an httpx client and exposes `aclose()`; an implementation that does not simply
-    has nothing to release, and this is a no-op for it.
-    """
-    if backend is None:
-        return
-    closer = getattr(backend, "aclose", None)
-    if closer is not None:
-        await closer()

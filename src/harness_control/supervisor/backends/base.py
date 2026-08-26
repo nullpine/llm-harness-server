@@ -44,6 +44,13 @@ class Backend(Protocol):
     async def resources(self) -> list[ResourceInfo]:
         """GPU/accelerator state. May be empty — that is valid."""
 
+    async def aclose(self) -> None:
+        """Release transport resources (HTTP clients, pipes). Idempotent.
+
+        Distinct from stop(): stop() unloads the model, aclose() releases what the
+        backend object itself holds. The supervisor calls it when it discards a
+        backend, so a switch does not leak a connection pool per activation."""
+
 
 class BackendError(Exception):
     """A backend could not do what it was asked.

@@ -33,7 +33,6 @@ from harness_control.supervisor.backends import (
     UnknownBackendError,
     VllmBackend,
     backend_names,
-    close_backend,
     create_backend,
 )
 from harness_control.supervisor.backends.base import ResourceInfo
@@ -135,7 +134,7 @@ class _ScriptedVllm:
 
 
 async def _aclose(backend: Backend) -> None:
-    await close_backend(backend)
+    await backend.aclose()
 
 
 async def wait_ready(backend: Backend, timeout_s: float) -> bool:
@@ -210,6 +209,19 @@ async def test_activate_after_stop_works(harness: Harness) -> None:
     await harness.backend.stop()
     await harness.backend.activate(harness.spec)
     assert await wait_ready(harness.backend, harness.ready_timeout_s)
+
+
+async def test_aclose_on_a_never_activated_backend_is_a_no_op(harness: Harness) -> None:
+    """The supervisor discards backends it never got as far as activating."""
+    await harness.backend.aclose()
+
+
+async def test_aclose_is_idempotent(harness: Harness) -> None:
+    """Called twice — the supervisor's `finally` can race an explicit shutdown."""
+    await harness.backend.activate(harness.spec)
+    assert await wait_ready(harness.backend, harness.ready_timeout_s)
+    await harness.backend.aclose()
+    await harness.backend.aclose()
 
 
 async def test_progress_hint_is_a_string_or_none(harness: Harness) -> None:

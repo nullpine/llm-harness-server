@@ -15,12 +15,7 @@ from collections.abc import Callable
 from harness_control.catalog import Catalog, ModelSpec
 from harness_control.models import GpuInfo, StateResponse
 from harness_control.settings import Settings
-from harness_control.supervisor.backends import (
-    Backend,
-    BackendError,
-    close_backend,
-    create_backend,
-)
+from harness_control.supervisor.backends import Backend, BackendError, create_backend
 from harness_control.supervisor.jobs import Job, JobRegistry, utcnow_iso
 from harness_control.supervisor.readiness import poll_until
 from harness_control.supervisor.state import ModelState, check_transition
@@ -203,7 +198,7 @@ class Supervisor:
         finally:
             # Even a backend that failed to unload must not leak its connections;
             # the supervisor owns lifecycle, the backend owns behaviour.
-            await close_backend(backend)
+            await backend.aclose()
         self._previous_model_id = self._active_model_id
         self._active_model_id = None
 
