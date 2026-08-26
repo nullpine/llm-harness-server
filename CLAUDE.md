@@ -16,6 +16,7 @@ This file loads automatically. **Nothing in `docs/` does.** Read them explicitly
 |---|---|
 | `docs/SPEC.md` | before any feature work — scope, hardware plan, acceptance criteria |
 | `docs/API-CONTRACT.md` | before touching `routes/` or `proxy.py` |
+| `docs/BACKENDS.md` | before touching `supervisor/`, `catalog.py`, or `models.yaml` |
 | `docs/PROJECT-STRUCTURE.md` | before creating a new file — it says where things go |
 | `docs/DEPLOY.md` / `docs/OPERATIONS.md` | before touching `scripts/` or `deploy/` |
 | `docs/BACKLOG.md` | at the start of every session — find your current milestone |
@@ -83,6 +84,13 @@ next load OOMs. Defences, all required:
 | `make smoke HOST=https://…` | `scripts/smoke.sh` against a real deployment |
 
 ## Notes on vLLM
+
+These apply to the **`vllm` backend only** — one of three, alongside `ollama` and
+`remote_openai` (ADR-0007, `docs/BACKENDS.md`).
+
+The MVP runs the `ollama` backend on local hardware. `vllm.py` is written to spec
+but not exercised until GPU quota exists — do not let it rot, and do not let it
+block local work.
 
 - Pin the exact version in `requirements.lock`. CLI flags move between releases;
   an unpinned upgrade will break `models.yaml` args with no warning.

@@ -5,7 +5,8 @@ llm-harness-server/
 ├── .claude/                           # ← how Claude Code picks this project up
 │   ├── rules/                         # path-scoped; load when matching files are opened
 │   │   ├── streaming.md               # the four anti-buffering defences
-│   │   └── process-safety.md          # one vLLM, kill the group, free the VRAM
+│   │   ├── process-safety.md          # one vLLM, kill the group, free the VRAM
+│   │   └── backend-boundary.md        # what belongs in a Backend, what in the supervisor
 │   ├── settings.json                  # committed: allowed/denied tool permissions
 │   └── settings.local.json            # gitignored: personal overrides
 │
@@ -21,6 +22,7 @@ llm-harness-server/
 ├── docs/
 │   ├── SPEC.md                        # ← the MVP spec
 │   ├── API-CONTRACT.md                # ← identical copy of the shared contract
+│   ├── BACKENDS.md                    # the Backend interface, the three impls, migration
 │   ├── DEPLOY.md                      # runbook: provision, rotate key, add a model, tear down
 │   ├── OPERATIONS.md                  # troubleshooting: OOM, stuck load, orphan GPU process
 │   ├── BACKLOG.md
@@ -29,7 +31,9 @@ llm-harness-server/
 │       ├── 0002-single-model-supervisor.md
 │       ├── 0003-subprocess-not-systemd-template.md
 │       ├── 0004-api-key-auth-for-mvp.md
-│       └── 0005-no-crash-loop-restart.md
+│       ├── 0005-no-crash-loop-restart.md
+│       ├── 0006-spot-instances-and-cost.md
+│       └── 0007-pluggable-inference-backends.md
 │
 ├── src/
 │   └── harness_control/
@@ -45,10 +49,13 @@ llm-harness-server/
 │       │   ├── __init__.py
 │       │   ├── state.py               # the state enum + transition guards
 │       │   ├── supervisor.py          # activate(), watchdog, activation lock
-│       │   ├── process.py             # spawn/terminate a vLLM process group safely
-│       │   ├── readiness.py           # poll vLLM /health with timeout
-│       │   ├── gpu.py                 # nvidia-smi parsing, wait_for_vram_release()
-│       │   └── jobs.py                # in-memory job registry (+ last 20 on disk)
+│       │   ├── jobs.py                # in-memory job registry (+ last 20 on disk)
+│       │   └── backends/
+│       │       ├── __init__.py        # registry: name → Backend impl
+│       │       ├── base.py            # the Backend Protocol + ResourceInfo
+│       │       ├── ollama.py          # local Apple Silicon — the MVP path
+│       │       ├── vllm.py            # process spawn/kill, readiness, VRAM release
+│       │       └── remote.py          # remote_openai — hosted or our own remote VM
 │       ├── routes/
 │       │   ├── __init__.py
 │       │   ├── health.py              # GET /healthz  (unauthenticated)
@@ -64,6 +71,7 @@ llm-harness-server/
 │   ├── test_auth.py
 │   ├── test_catalog.py
 │   ├── test_state_machine.py          # every legal + illegal transition
+│   ├── test_backends.py               # the shared contract suite, run against every backend
 │   ├── test_supervisor_activate.py    # drain, timeout, concurrent activate → 409
 │   ├── test_proxy_streaming.py        # asserts chunks arrive incrementally, not batched
 │   ├── test_proxy_abort.py            # client disconnect cancels upstream
@@ -83,6 +91,7 @@ llm-harness-server/
 │       └── harness
 │
 ├── scripts/
+│   ├── dev-local.sh                   # Ollama + control plane on this Mac  ← the MVP path
 │   ├── provision.sh                   # one-shot fresh-VM setup (idempotent)
 │   ├── install-nvidia.sh              # driver + CUDA, skipped if nvidia-smi already works
 │   ├── mount-data-disk.sh             # format + fstab by UUID → /mnt/models
@@ -110,10 +119,15 @@ llm-harness-server/
 
 1. `settings.py`, `errors.py`, `models.py`, `catalog.py` — config and vocabulary, fully tested
 2. `supervisor/state.py` + `test_state_machine.py` — the state machine on its own, no I/O
-3. `supervisor/process.py`, `gpu.py`, `readiness.py` — the OS-facing parts, tested against `fake_vllm`
-4. `supervisor/supervisor.py` — wire it together
-5. `routes/` + `proxy.py` — HTTP surface; `test_proxy_streaming.py` is the one that catches buffering
-6. `deploy/` + `scripts/` — provisioning last, once there is something to provision
+3. `supervisor/backends/base.py` — the `Backend` Protocol and the shared contract tests
+4. `supervisor/backends/ollama.py` — the MVP path; preload, `keep_alive: 0` unload, `/api/ps` health
+5. `supervisor/backends/vllm.py` (spawn/kill the process group, readiness polling,
+   `wait_for_vram_release()`) and `backends/remote.py`. `vllm.py` is written to spec
+   but **not exercised until GPU hardware exists** — it must stay lint- and type-clean
+   and satisfy the shared contract tests, and it must not gate local work
+6. `supervisor/supervisor.py` — wire it together
+7. `routes/` + `proxy.py` — HTTP surface; `test_proxy_streaming.py` is the one that catches buffering
+8. `deploy/` + `scripts/` — provisioning last, once there is something to provision
 
 `tests/fake_vllm.py` means the entire test suite runs on GitHub Actions with no
 GPU. Nothing in `tests/` may require CUDA.
