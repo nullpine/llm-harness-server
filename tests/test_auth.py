@@ -3,8 +3,10 @@
 import httpx
 import pytest
 
+import harness_control
 from conftest import API_KEY, AUTH, MODEL_ID
 from harness_control.auth import check_key, extract_bearer, is_exempt
+from harness_control.routes.health import CONTRACT_VERSION
 
 #: Every authenticated route M1 ships. `/v1/chat/completions` is POST-only.
 PROTECTED = [("GET", "/v1/models"), ("GET", "/admin/state"), ("POST", "/v1/chat/completions")]
@@ -54,12 +56,14 @@ async def test_healthz_needs_no_key(client: httpx.AsyncClient) -> None:
     body = response.json()
     assert body["status"] == "ok"
     assert isinstance(body["uptime_s"], int)
+    assert body["version"] == CONTRACT_VERSION, "clients compare this for compatibility"
+    assert body["service_version"] == harness_control.__version__
 
 
 async def test_healthz_reveals_nothing(client: httpx.AsyncClient) -> None:
     """Contract §3: "Never reveals model or key info."""
     body = await client.get("/healthz")
-    assert set(body.json()) == {"status", "version", "uptime_s"}
+    assert set(body.json()) == {"status", "version", "service_version", "uptime_s"}
     assert API_KEY not in body.text
     assert MODEL_ID not in body.text
 

@@ -55,6 +55,9 @@ Nothing runs yet; everything is in place to start.
 - [ ] `settingsStore.ts` + `secretStore.ts`
 - [ ] Window with security hardening, preload bridge, empty React shell
 - [ ] Settings modal with Test connection working end to end
+- [ ] Mock server serves both /healthz versions (`version` = contract, `service_version` = build) and the renamed /admin/models fields (`model_ref`, `available`)
+- [ ] `sseStream.ts` tolerates `delta.reasoning` (Ollama) as well as `delta.reasoning_content` (vLLM) — Ollama is the local MVP path, so this is the one that actually fires
+- [ ] Nothing keys off a chunk's `model` field; responses correlate by requestId only
 
 **Exit (server):** L1, L2, L3 (see SPEC §7.1).
 **Exit (desktop):** A1, A8, A9 from `SPEC.md` §10.
@@ -151,3 +154,7 @@ Kept here so it stays out of the MVP. Roughly in the order it will matter.
 13. A hosted OpenAI-compatible provider as a second catalog entry — the desktop app
     already speaks the contract, so pointing it at a hosted endpoint is a config
     change. Useful as the everyday default with the VM reserved for private work.
+14. Real cross-repo contract check. Today each repo verifies its own
+    API-CONTRACT.md against its own stamp, which catches a local edit that skipped
+    re-stamping but not divergence between the repos. A CI step fetching the other
+    repo's `.api-contract.sha256` and comparing would close it.
