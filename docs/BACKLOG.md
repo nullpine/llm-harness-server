@@ -1,16 +1,8 @@
 # LLM Harness — MVP Roadmap
 
-Two repos, six milestones. The server leads by one milestone so the desktop app
-always has something real to build against — but the desktop app is unblocked from
-day one by its mock server, so M1 and M2 can run in parallel.
-
-```
-        M0 ──────────────────────────────────────────────────────► both repos
-        │
-server  ├── M1 serve one model ──► M2 switch models ──► M4 harden ──┐
-        │                                                            ├──► M5 ship
-desktop └── M1 mock + shell ────► M2 chat + stream ──► M3 dropdown ──┘
-```
+Server milestones only. The desktop side of each milestone lives in
+[llm-harness-desktop/docs/BACKLOG.md](https://github.com/nullpine/llm-harness-desktop/blob/main/docs/BACKLOG.md).
+Milestone numbering is shared; contents are per-repo.
 
 ---
 
@@ -48,19 +40,7 @@ Nothing runs yet; everything is in place to start.
 - [ ] `scripts/provision.sh` up to "one model serving over HTTPS"
 - [ ] **First real deploy.** GLM 4.7 Flash answering `curl -N` through Caddy.
 
-### desktop
-- [ ] `src/shared/types.ts`, `ipc.ts`, `constants.ts`
-- [ ] `scripts/dev-mock-server.mjs` implementing the full contract, incl. fake loads
-- [ ] `harnessClient.ts` + `sseStream.ts`, unit-tested against the mock
-- [ ] `settingsStore.ts` + `secretStore.ts`
-- [ ] Window with security hardening, preload bridge, empty React shell
-- [ ] Settings modal with Test connection working end to end
-- [ ] Mock server serves both /healthz versions (`version` = contract, `service_version` = build) and the renamed /admin/models fields (`model_ref`, `available`)
-- [ ] `sseStream.ts` tolerates `delta.reasoning` (Ollama) as well as `delta.reasoning_content` (vLLM) — Ollama is the local MVP path, so this is the one that actually fires
-- [ ] Nothing keys off a chunk's `model` field; responses correlate by requestId only
-
 **Exit (server):** L1, L2, L3 (see SPEC §7.1).
-**Exit (desktop):** A1, A8, A9 from `SPEC.md` §10.
 
 ---
 
@@ -74,33 +54,17 @@ Nothing runs yet; everything is in place to start.
 - [ ] `progress_hint` parsed from vLLM/HF output during load
 - [ ] `scripts/download-models.sh`; both models pre-downloaded on the VM
 
-### desktop
-- [ ] `conversationStore.ts` with atomic writes and corrupt-file tolerance
-- [ ] Chat pane: message list, bubbles, markdown, code copy, streaming cursor
-- [ ] Composer: Enter/Shift+Enter, autogrow, Stop button with real abort
-- [ ] `serverPoller.ts` adaptive polling → `models:stateChanged`
-- [ ] Conversation sidebar: create, list, rename, delete, date grouping
-- [ ] Reasoning block (collapsed `Thinking`)
-
 **Exit (server):** L4–L11.
-**Exit (desktop):** A2, A3, A7, A10, A12.
 
 ---
 
-## M3 — The dropdown (1–2 days, desktop)
+## M3 — The dropdown (1–2 days)
 
-- [ ] `ModelDropdown` + `ModelStatusPill` fed by the catalog
-- [ ] `SwitchModelDialog` with the honest load-time warning
-- [ ] `LoadingBanner` with elapsed time and `progressHint`; composer disabled
-- [ ] Failure path: red banner, `lastError`, **View server logs** modal
-- [ ] `— switched to X —` divider in the transcript; per-message `modelId` label
-- [ ] `unreachable` state handling and automatic recovery
-
-**Exit:** A4, A5, A6.
+Entirely desktop. Nothing on the server moves; see the desktop backlog.
 
 ---
 
-## M4 — Harden (2 days, mostly server)
+## M4 — Harden (2 days)
 
 - [ ] `HARNESS_AUTOLOAD_LAST` — reboot restores the last model
 - [ ] Orphan-process cleanup on startup; `wait_for_vram_release` before every spawn
@@ -112,7 +76,6 @@ Nothing runs yet; everything is in place to start.
       errors clearly (ADR-0006)
 - [ ] `scripts/smoke.sh` covering the full B-list
 - [ ] `docs/OPERATIONS.md`: OOM, stuck load, orphan GPU process, expired cert
-- [ ] Desktop: idle-chunk timeout, retry on failed message, error envelope → friendly copy
 - [ ] Azure GPU path: `provision.sh`, Caddy, systemd, spot provisioning — gated on
       pay-as-you-go + `NCADS_H100_v5` standard **and** spot quota. Verified against
       SPEC §7.2 when hardware exists
