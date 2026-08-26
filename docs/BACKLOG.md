@@ -51,6 +51,11 @@ Nothing runs yet; everything is in place to start.
 - [ ] `POST /admin/models/{id}/activate`, `GET /admin/jobs/{id}`, `GET /admin/models`
 - [ ] Watchdog: vLLM death → `error` within 5 s
 - [ ] `logbuf.py` + `GET /admin/logs`
+- [ ] Log an aborted relay at INFO, not DEBUG. `proxy.py` logs the relay closing
+      at DEBUG, so at the default level a client disconnect leaves no trace and
+      acceptance A3 ("the server-side request is cancelled") cannot be confirmed
+      by reading logs. An abort is a real, rare event and deserves a line. This
+      milestone touches the log buffer anyway.
 - [ ] `progress_hint` parsed from vLLM/HF output during load
 - [ ] `scripts/download-models.sh`; both models pre-downloaded on the VM
 
