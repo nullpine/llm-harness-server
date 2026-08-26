@@ -1,17 +1,8 @@
 # Changelog
 
-All notable changes to this project. The version reported by `GET /healthz` is
-the contract version in `docs/API-CONTRACT.md`.
+This project has not been released yet. Entries begin at v0.1.0 (milestone M5).
+Until then, `git log` records what changed and `docs/adr/` records why.
 
-## [Unreleased]
-
-### Added
-
-- M0 toolchain: `pyproject.toml` (ruff, mypy `--strict`, pytest), `Makefile`
-  targets `setup/dev/test/lint/fmt/smoke/lock/clean`, and a `.venv` built by
-  `make` so CI runs exactly what a developer runs.
-- `requirements.lock` — the VM's install, resolved for `x86_64-manylinux_2_28`
-  and Python 3.12, with vLLM pinned to 0.27.1.
-- GitHub Actions: `ci.yml` (lint → typecheck → test, no GPU) and
-  `shellcheck.yml` (warnings fail).
-- Issue and pull request templates carrying the repo's guard rails.
+Rationale: an Unreleased section that some PRs update and others skip is worse than
+none. The v0.1.0 entry will be a single "initial release" summary, so there is
+nothing to accumulate before M5.
