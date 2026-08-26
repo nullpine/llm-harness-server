@@ -11,6 +11,7 @@ Two things here are load-bearing and easy to undo by accident:
 
 import contextlib
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 
@@ -82,14 +83,57 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # small SSE frames.
     app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
 
-    if settings.autoload_model:
-        await _autoload(supervisor, settings.autoload_model)
+    assert_single_model_daemon(settings)
+    supervisor.start_watchdog()
+
+    # SPEC §5.2: a reboot self-heals by restoring whatever was serving.
+    model_id = settings.autoload_model or (
+        supervisor.last_model() if settings.autoload_last else None
+    )
+    if model_id:
+        await _autoload(supervisor, model_id)
 
     try:
         yield
     finally:
         await supervisor.shutdown()
         await app.state.http_client.aclose()
+
+
+class MisconfiguredDaemonError(RuntimeError):
+    """The Ollama daemon is configured in a way that breaks a core invariant."""
+
+
+def assert_single_model_daemon(settings: Settings) -> None:
+    """Refuse to start unless the daemon will hold exactly one model.
+
+    `OLLAMA_MAX_LOADED_MODELS` defaults to 3. With it wrong, a switch leaves the
+    old model resident alongside the new one while `/admin/state` reports one
+    active — and on a machine with room to spare (this one has 48 GB) there is no
+    memory pressure to reveal it. The invariant simply becomes quietly false.
+
+    That invisibility is why this is fatal rather than a warning: a warning in a
+    log nobody reads is indistinguishable from working, and the first symptom
+    would be a user wondering why the wrong model answered.
+    """
+    if settings.default_backend != "ollama":
+        return
+
+    raw = os.environ.get("OLLAMA_MAX_LOADED_MODELS")
+    if raw is None:
+        raise MisconfiguredDaemonError(
+            "OLLAMA_MAX_LOADED_MODELS is not set. Ollama defaults to 3 concurrent "
+            "models, which silently breaks the single-active-model invariant: a "
+            "switch would leave both models resident while /admin/state reports "
+            "one. Start the daemon through scripts/dev-local.sh, or export "
+            "OLLAMA_MAX_LOADED_MODELS=1 before starting it."
+        )
+    if raw.strip() != "1":
+        raise MisconfiguredDaemonError(
+            f"OLLAMA_MAX_LOADED_MODELS is {raw!r}, must be 1. Anything else lets "
+            f"the daemon hold several models at once, which makes the active "
+            f"model reported by /admin/state a guess rather than a fact."
+        )
 
 
 async def _autoload(supervisor: Supervisor, model_id: str) -> None:
@@ -103,10 +147,13 @@ async def _autoload(supervisor: Supervisor, model_id: str) -> None:
     try:
         job = await supervisor.activate(model_id)
     except UnknownModelError:
-        log.error("HARNESS_AUTOLOAD_MODEL=%s is not in the catalog", model_id)
+        log.error("%s is not in the catalog; nothing autoloaded", model_id)
         return
-    if job.status == "failed":
-        log.error("autoload of %s failed: %s", model_id, job.error)
+    if job is None:
+        return
+    # Activation is asynchronous now (contract §3), so startup does not block on
+    # the load. The client watches /admin/state like any other switch.
+    log.info("autoload of %s started as job %s", model_id, job.job_id)
 
 
 _app: FastAPI | None = None

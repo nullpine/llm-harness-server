@@ -1,6 +1,19 @@
-# The MVP catalog. One model until M2 builds switching — see docs/BACKLOG.md.
-# `model_ref` is the Ollama tag here; on the `vllm` backend it becomes the HF repo
-# and `estimated_load_seconds` roughly triples (docs/BACKENDS.md §3).
+# The MVP catalog. `model_ref` is the Ollama tag here; on the `vllm` backend it
+# becomes the HF repo and `estimated_load_seconds` roughly triples
+# (docs/BACKENDS.md §3).
+#
+# `estimated_load_seconds` is measured on the machine in use, not guessed: the
+# desktop app shows it in the switch-confirmation dialog, so a wrong number is a
+# promise the app breaks.
+#
+# Measured on this machine (M-series, 48 GB) over four alternating switches:
+#   glm-4.7-flash   5.0s, 6.8s
+#   qwen3.8-27b     5.4s, 9.1s
+# The values below sit just above the observed maximum. They describe a *warm*
+# load, with the weights still in the page cache — the usual case when switching
+# during a session. The first load after a reboot reads ~19 GB off disk and takes
+# considerably longer; under-promising there is better than a dialog that claims
+# 30s for something that normally takes six.
 defaults:
   backend: ollama
 
@@ -12,4 +25,13 @@ models:
     params: 30B-A3B (MoE)
     quantization: q4_K_M
     context_length: 32768
-    estimated_load_seconds: 25
+    estimated_load_seconds: 10
+
+  - id: qwen3.8-27b
+    display_name: Qwen 3.8 27B
+    backend: ollama
+    model_ref: qwen3.8:27b-q4_K_M
+    params: 27B (dense)
+    quantization: q4_K_M
+    context_length: 32768
+    estimated_load_seconds: 12

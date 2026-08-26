@@ -123,6 +123,12 @@ class _ScriptedVllm:
     async def health(self) -> bool:
         return await self._inner.health()
 
+    async def await_released(self, timeout_s: float) -> None:
+        await self._inner.await_released(timeout_s)
+
+    async def is_available(self, spec: ModelSpec) -> bool:
+        return await self._inner.is_available(spec)
+
     async def progress_hint(self) -> str | None:
         return await self._inner.progress_hint()
 
@@ -222,6 +228,27 @@ async def test_aclose_is_idempotent(harness: Harness) -> None:
     assert await wait_ready(harness.backend, harness.ready_timeout_s)
     await harness.backend.aclose()
     await harness.backend.aclose()
+
+
+async def test_await_released_is_safe_before_anything_was_activated(harness: Harness) -> None:
+    """The supervisor calls it on every switch, including the first."""
+    await harness.backend.await_released(timeout_s=5.0)
+
+
+async def test_await_released_returns_once_the_model_is_gone(harness: Harness) -> None:
+    """A correctness guard: the supervisor must not load on top of a live model."""
+    await harness.backend.activate(harness.spec)
+    assert await wait_ready(harness.backend, harness.ready_timeout_s)
+
+    await harness.backend.stop()
+    await harness.backend.await_released(timeout_s=10.0)
+
+    assert await harness.backend.health() is False
+
+
+async def test_is_available_answers_for_a_catalogued_model(harness: Harness) -> None:
+    result = await harness.backend.is_available(harness.spec)
+    assert isinstance(result, bool)
 
 
 async def test_progress_hint_is_a_string_or_none(harness: Harness) -> None:

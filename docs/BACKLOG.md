@@ -47,15 +47,12 @@ Nothing runs yet; everything is in place to start.
 ## M2 — Chat, and switch models (3–4 days)
 
 ### server
-- [ ] `supervisor/supervisor.py`: activate, drain, activation lock, job registry
-- [ ] `POST /admin/models/{id}/activate`, `GET /admin/jobs/{id}`, `GET /admin/models`
-- [ ] Watchdog: vLLM death → `error` within 5 s
-- [ ] `logbuf.py` + `GET /admin/logs`
-- [ ] Log an aborted relay at INFO, not DEBUG. `proxy.py` logs the relay closing
-      at DEBUG, so at the default level a client disconnect leaves no trace and
-      acceptance A3 ("the server-side request is cancelled") cannot be confirmed
-      by reading logs. An abort is a real, rare event and deserves a line. This
-      milestone touches the log buffer anyway.
+- [x] `supervisor/supervisor.py`: activate, drain, activation lock, job registry
+- [x] `POST /admin/models/{id}/activate`, `GET /admin/jobs/{id}`, `GET /admin/models`
+- [x] Watchdog: backend death → `error` within 5 s (measured: 1.5 s)
+- [x] `logbuf.py` + `GET /admin/logs`
+- [x] Log an aborted relay at INFO, not DEBUG — a client disconnect now leaves a
+      line at the default level, so A3/L9 can be confirmed by reading logs.
 - [ ] `progress_hint` parsed from vLLM/HF output during load
 - [ ] `scripts/download-models.sh`; both models pre-downloaded on the VM
 

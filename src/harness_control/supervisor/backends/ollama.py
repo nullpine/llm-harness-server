@@ -5,6 +5,8 @@ no directory to manage. "Activate" is a preload with `keep_alive: -1` (pin), and
 "stop" is the same call with `keep_alive: 0` (unload now).
 """
 
+import asyncio
+import os
 from typing import Any
 
 import httpx
@@ -16,6 +18,7 @@ from harness_control.supervisor.backends.base import BackendError, ResourceInfo
 #: until the weights are resident. It is still a single request, not a poll.
 _ACTIVATE_TIMEOUT_S = 600.0
 _QUICK_TIMEOUT_S = 5.0
+_UNLOAD_POLL_INTERVAL_S = 0.25
 
 
 class OllamaBackend:
@@ -32,6 +35,8 @@ class OllamaBackend:
         self._client = client or httpx.AsyncClient(timeout=_QUICK_TIMEOUT_S)
         self._owns_client = client is None
         self._model_ref: str | None = None
+        #: What `stop()` last asked the daemon to unload, for `await_released()`.
+        self._released_ref: str | None = None
 
     @property
     def base_url(self) -> str:
@@ -57,8 +62,10 @@ class OllamaBackend:
         if model_ref is None:
             return
         # Clear first: a failed unload must not leave us believing we still own a
-        # model, or the next stop() would try again forever.
+        # model, or the next stop() would try again forever. Remembered for
+        # `await_released()`, which has to know what it is waiting to disappear.
         self._model_ref = None
+        self._released_ref = model_ref
         await self._generate(model_ref, keep_alive=0, timeout_s=_QUICK_TIMEOUT_S)
 
     async def health(self) -> bool:
@@ -66,12 +73,103 @@ class OllamaBackend:
         if self._model_ref is None:
             return False
         try:
-            response = await self._client.get(f"{self._url}/api/ps", timeout=_QUICK_TIMEOUT_S)
+            return self._model_ref in await self.loaded_models()
+        except BackendError:
+            return False
+
+    async def loaded_models(self) -> set[str]:
+        """Every tag the daemon currently holds in memory (`GET /api/ps`).
+
+        The supervisor asks "is the old model gone yet"; knowing that `/api/ps`
+        is the place to look — and that it is not the same question as "is the
+        tag downloaded" — is the backend's business
+        (`.claude/rules/backend-boundary.md`).
+        """
+        return await self._names_from("/api/ps")
+
+    async def available_models(self) -> set[str]:
+        """Every tag pulled to disk (`GET /api/tags`).
+
+        Deliberately not `/api/ps`: that lists what is *loaded right now*, so
+        using it for `available` in `/admin/models` would report a perfectly
+        usable model as unavailable the moment it is not the active one.
+        """
+        return await self._names_from("/api/tags")
+
+    async def _names_from(self, path: str) -> set[str]:
+        try:
+            response = await self._client.get(f"{self._url}{path}", timeout=_QUICK_TIMEOUT_S)
             response.raise_for_status()
             payload = response.json()
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError) as exc:
+            raise BackendError(f"ollama at {self._url}{path} did not answer: {exc}") from exc
+        return _model_names(payload)
+
+    async def max_loaded_models(self) -> int | None:
+        """What the daemon will hold at once, or None if it will not say.
+
+        `OLLAMA_MAX_LOADED_MODELS` defaults to 3. On a 32 GB machine two of these
+        models do not fit, so a daemon started without it will swap the machine
+        into uselessness during a switch — see `docs/BACKENDS.md` §2.1. Asserted
+        at startup rather than assumed.
+        """
+        try:
+            response = await self._client.get(f"{self._url}/api/version", timeout=_QUICK_TIMEOUT_S)
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+        # Ollama exposes no config endpoint, so this is read from the environment
+        # the control plane and the daemon are expected to share (dev-local.sh
+        # starts both). None means "cannot tell", which is not the same as wrong.
+        raw = os.environ.get("OLLAMA_MAX_LOADED_MODELS")
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    async def await_released(self, timeout_s: float) -> None:
+        """Poll `/api/ps` until the tag we just unloaded is gone.
+
+        A correctness guard, not a memory-safety one: this machine has room for
+        both models, so an unload that never completed would not thrash. It would
+        simply leave two models resident while the supervisor reports one active
+        — true state and reported state diverging, with nothing to notice it.
+
+        `stop()` returning is not enough on its own: Ollama's unload is
+        asynchronous, and `keep_alive: 0` only requests it.
+        """
+        if self._released_ref is None:
+            return
+
+        released = self._released_ref
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+
+        while True:
+            try:
+                loaded = await self.loaded_models()
+            except BackendError:
+                # The daemon is unreachable, so nothing of ours is resident.
+                self._released_ref = None
+                return
+            if released not in loaded:
+                self._released_ref = None
+                return
+            if loop.time() >= deadline:
+                raise BackendError(
+                    f"{released!r} was still loaded {timeout_s:.0f}s after being unloaded; "
+                    f"refusing to activate another model on top of it"
+                )
+            await asyncio.sleep(_UNLOAD_POLL_INTERVAL_S)
+
+    async def is_available(self, spec: ModelSpec) -> bool:
+        """Whether the tag is pulled. `/api/tags`, not `/api/ps` — see above."""
+        try:
+            return spec.model_ref in await self.available_models()
+        except BackendError:
             return False
-        return self._model_ref in _loaded_names(payload)
 
     async def progress_hint(self) -> str | None:
         """None in M1. Parsing pull progress is an M2 item (docs/BACKLOG.md)."""
@@ -104,8 +202,8 @@ class OllamaBackend:
             raise BackendError(f"ollama at {self._url} is unreachable: {exc}") from exc
 
 
-def _loaded_names(payload: Any) -> set[str]:
-    """The model tags in an `/api/ps` body, tolerating a daemon that answers oddly."""
+def _model_names(payload: Any) -> set[str]:
+    """Tags out of an `/api/ps` or `/api/tags` body, tolerating an odd answer."""
     if not isinstance(payload, dict):
         return set()
     models = payload.get("models")

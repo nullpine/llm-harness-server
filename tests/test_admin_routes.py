@@ -5,6 +5,8 @@ about the contract's state table, not about buffering — acceptance L6 and L7:
 "never a hang or a 500".
 """
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -203,3 +205,177 @@ async def test_the_upstream_is_addressed_by_model_ref_not_our_id(
     forwarded = upstream.chat_calls[-1]["body"]  # type: ignore[attr-defined]
     assert forwarded["model"] == DEFAULT_MODEL
     assert forwarded["model"] != MODEL_ID
+
+
+# --- L6: mid-switch requests are refused, never hung ---------------------------
+
+
+async def test_l6_a_request_during_a_switch_is_503_with_retry_after(
+    client: httpx.AsyncClient, ready_supervisor: Supervisor, upstream: object
+) -> None:
+    """The guard is load-bearing, not decoration.
+
+    Ollama auto-loads on demand, so a completion arriving mid-switch would make
+    the daemon load whatever model it names — two models resident, and the
+    single-active invariant quietly false. Refusing is what prevents that.
+    """
+    upstream.generate_delay_s = 0.4  # type: ignore[attr-defined]
+    await ready_supervisor.activate("qwen3.8-27b")
+
+    saw_503 = False
+    for _ in range(60):
+        response = await client.post("/v1/chat/completions", json=CHAT_BODY, headers=AUTH)
+        if response.status_code == 503:
+            saw_503 = True
+            assert response.json()["error"]["code"] == "model_loading"
+            # The incoming model's advertised time, not a fallback guess.
+            assert int(response.headers["Retry-After"]) == 12
+            break
+        await asyncio.sleep(0.01)
+
+    await ready_supervisor.wait_for_activation()
+    assert saw_503, "no request was refused during the switch"
+
+
+async def test_l6_the_daemon_is_never_asked_to_generate_mid_switch(
+    client: httpx.AsyncClient, ready_supervisor: Supervisor, upstream: object
+) -> None:
+    """The refusal happens before the proxy reaches upstream, not after."""
+    upstream.generate_delay_s = 0.3  # type: ignore[attr-defined]
+    await ready_supervisor.activate("qwen3.8-27b")
+
+    before = len(upstream.chat_calls)  # type: ignore[attr-defined]
+    for _ in range(20):
+        await client.post("/v1/chat/completions", json=CHAT_BODY, headers=AUTH)
+        if ready_supervisor.state is ModelState.READY:
+            break
+        await asyncio.sleep(0.01)
+    await ready_supervisor.wait_for_activation()
+
+    refused_while_switching = len(upstream.chat_calls) - before  # type: ignore[attr-defined]
+    assert refused_while_switching == 0, "a completion reached the daemon mid-switch"
+
+
+# --- the admin surface --------------------------------------------------------
+
+
+async def test_activate_returns_202_with_a_job(
+    client: httpx.AsyncClient, ready_supervisor: Supervisor
+) -> None:
+    response = await client.post("/admin/models/qwen3.8-27b/activate", headers=AUTH)
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["job_id"].startswith("act_")
+    assert body["model_id"] == "qwen3.8-27b"
+    assert body["estimated_seconds"] == 12
+    await ready_supervisor.wait_for_activation()
+
+
+async def test_activating_the_active_model_returns_200(client: httpx.AsyncClient) -> None:
+    response = await client.post("/admin/models/glm-4.7-flash/activate", headers=AUTH)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": None,
+        "model_id": "glm-4.7-flash",
+        "already_active": True,
+    }
+
+
+async def test_activating_an_unknown_model_is_404(client: httpx.AsyncClient) -> None:
+    response = await client.post("/admin/models/no-such-model/activate", headers=AUTH)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+async def test_l10_a_second_activation_is_409(
+    client: httpx.AsyncClient, ready_supervisor: Supervisor, upstream: object
+) -> None:
+    upstream.generate_delay_s = 0.3  # type: ignore[attr-defined]
+
+    first = await client.post("/admin/models/qwen3.8-27b/activate", headers=AUTH)
+    second = await client.post("/admin/models/glm-4.7-flash/activate", headers=AUTH)
+
+    assert first.status_code == 202
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "activation_in_progress"
+    await ready_supervisor.wait_for_activation()
+
+
+async def test_admin_models_uses_the_v1_1_field_names(client: httpx.AsyncClient) -> None:
+    """`model_ref` and `available`, not `hf_repo`/`downloaded` — renamed in v1.1."""
+    response = await client.get("/admin/models", headers=AUTH)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"active_model_id", "state", "models"}
+
+    row = next(m for m in body["models"] if m["id"] == "glm-4.7-flash")
+    assert row["model_ref"] == "glm-4.7-flash:q4_K_M"
+    assert row["available"] is True
+    assert "hf_repo" not in row
+    assert "downloaded" not in row
+
+
+async def test_admin_models_reports_availability_from_tags_not_residency(
+    client: httpx.AsyncClient, upstream: object
+) -> None:
+    """A pulled-but-not-loaded model is available; otherwise nothing is switchable."""
+    body = (await client.get("/admin/models", headers=AUTH)).json()
+    inactive = next(m for m in body["models"] if m["id"] == "qwen3.8-27b")
+
+    assert inactive["state"] == "idle", "only the active model carries live state"
+    assert inactive["available"] is True, "not loaded is not the same as not available"
+
+
+async def test_admin_models_marks_an_unpulled_model_unavailable(
+    client: httpx.AsyncClient, upstream: object
+) -> None:
+    upstream.pulled = {"glm-4.7-flash:q4_K_M"}  # type: ignore[attr-defined]
+
+    body = (await client.get("/admin/models", headers=AUTH)).json()
+    row = next(m for m in body["models"] if m["id"] == "qwen3.8-27b")
+
+    assert row["available"] is False
+
+
+async def test_admin_jobs_reports_a_job(
+    client: httpx.AsyncClient, ready_supervisor: Supervisor
+) -> None:
+    started = await client.post("/admin/models/qwen3.8-27b/activate", headers=AUTH)
+    job_id = started.json()["job_id"]
+    await ready_supervisor.wait_for_activation()
+
+    response = await client.get(f"/admin/jobs/{job_id}", headers=AUTH)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["status"] == "succeeded"
+    assert body["model_id"] == "qwen3.8-27b"
+    assert body["finished_at"] is not None
+
+
+async def test_admin_jobs_404s_for_an_unknown_id(client: httpx.AsyncClient) -> None:
+    response = await client.get("/admin/jobs/act_99999999", headers=AUTH)
+    assert response.status_code == 404
+
+
+async def test_admin_logs_returns_the_ring_buffer(
+    client: httpx.AsyncClient, ready_supervisor: Supervisor
+) -> None:
+    ready_supervisor.logbuf.append("INFO something happened")
+
+    response = await client.get("/admin/logs?lines=50&source=control", headers=AUTH)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "control"
+    assert "INFO something happened" in body["lines"]
+
+
+async def test_admin_logs_rejects_an_unknown_source(client: httpx.AsyncClient) -> None:
+    response = await client.get("/admin/logs?source=syslog", headers=AUTH)
+    assert response.status_code == 422
