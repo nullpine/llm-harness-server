@@ -57,8 +57,22 @@ authenticate a client, and change which model is loaded.
 - A web UI (the desktop app is the only client)
 - Terraform/Bicep-managed infrastructure — MVP provisions with a shell script;
   IaC is a post-MVP item
+- Backend-specific features that would leak into the contract — tool calling,
+  logprobs, vision. Ollama supports none of them; keeping them out of the MVP is
+  what makes the backends interchangeable
 
-## 4. Hardware & model plan
+## 4. Deployment targets
+
+The inference engine is pluggable — see ADR-0007 and `docs/BACKENDS.md`.
+Two targets are specified here.
+
+| | Backend | Status |
+|---|---|---|
+| **Local — the MVP target** | `ollama` on Apple Silicon | what we build and test against now (§4.3) |
+| Azure GPU VM | `vllm` on H100 | the production target, blocked on GPU quota (§4.1–4.2) |
+
+Everything in §4.1 and §4.2 remains accurate for the Azure target. It is not the
+current deployment. Migration steps are in `docs/BACKENDS.md` §4.1.
 
 ### 4.1 VM
 
@@ -128,6 +142,28 @@ context is a KV-cache tuning exercise that needs a measured headroom check under
 concurrent load — worth doing, but as a deliberate task with a benchmark behind it,
 not as a starting default that quietly OOMs on a long conversation.
 
+### 4.3 Local target (current)
+
+| | Choice | Notes |
+|---|---|---|
+| Host | Apple Silicon Mac, 32 GB unified memory | runs both spec'd models at 4-bit |
+| Engine | Ollama daemon on `127.0.0.1:11434` | OpenAI-compatible at `/v1`, manages weights itself |
+| Control plane | `127.0.0.1:8080`, no TLS | the desktop app's settings validator already permits `http://localhost` |
+| Auth | bearer key, same as production | keep it — it is the contract, and it makes the local and remote paths identical |
+| Cost | zero | |
+
+Required daemon configuration: **`OLLAMA_MAX_LOADED_MODELS=1`**. Ollama defaults
+to three concurrent models, which would silently violate the single-active-model
+invariant — the dropdown would claim one model while the daemon held three.
+
+No Caddy, no systemd, no `provision.sh` on this path. `scripts/dev-local.sh`
+starts the daemon and the control plane together.
+
+| id | Ollama tag | Weights (q4_K_M) | Load |
+|---|---|---|---|
+| `glm-4.7-flash` | `glm-4.7-flash:q4_K_M` | ~18 GB | ~25 s |
+| `qwen3.8-27b` | `qwen3.8:27b-q4_K_M` | ~16 GB | ~35 s |
+
 ## 5. Components
 
 ### 5.1 Control plane (`harness_control`)
@@ -153,6 +189,12 @@ Modules:
 
 State: `idle | loading | ready | stopping | error` (see the API contract for the
 externally visible machine).
+
+The supervisor owns the state machine, the activation lock, the drain, and the
+job registry. **How** a model is made to serve belongs to the backend — see
+`docs/BACKENDS.md` §1. The steps below describe the `vllm` backend; `ollama`
+substitutes a preload call for the spawn and a `keep_alive: 0` for the kill,
+and `remote_openai` makes both no-ops.
 
 ```
 activate(model_id):
@@ -220,36 +262,34 @@ the single most likely bug in this component.
 ### 5.4 `models.yaml`
 
 ```yaml
-# /etc/harness/models.yaml
 defaults:
-  max_model_len: 32768
-  gpu_memory_utilization: 0.90
-  extra_args: ["--disable-log-requests"]
+  backend: ollama
 
 models:
   - id: glm-4.7-flash
     display_name: GLM 4.7 Flash
-    hf_repo: zai-org/GLM-4.7-Flash
+    backend: ollama
+    model_ref: glm-4.7-flash:q4_K_M      # the ollama tag
     params: 30B-A3B (MoE)
-    quantization: fp8
+    quantization: q4_K_M
     context_length: 32768
-    estimated_load_seconds: 75
-    args:
-      - --served-model-name=glm-4.7-flash
-      - --tool-call-parser=glm47
-      - --reasoning-parser=glm45
-      - --enable-auto-tool-choice
+    estimated_load_seconds: 25
 
   - id: qwen3.8-27b
     display_name: Qwen 3.8 27B
-    hf_repo: Qwen/Qwen3.8-27B-FP8
+    backend: ollama
+    model_ref: qwen3.8:27b-q4_K_M
     params: 27B (dense)
-    quantization: fp8
+    quantization: q4_K_M
     context_length: 32768
-    estimated_load_seconds: 110
-    args:
-      - --served-model-name=qwen3.8-27b
+    estimated_load_seconds: 35
 ```
+
+`model_ref` replaces the former `hf_repo`: what it names depends on the backend —
+an Ollama tag, a Hugging Face repo, or a provider's model string. `args` is passed
+through only by backends that can use it. `estimated_load_seconds` is per-backend
+and must be honest for the configuration in use, because the desktop app shows it
+in the switch-confirmation dialog.
 
 Validated with pydantic at startup; an invalid file is a hard startup failure with
 a readable message, never a silent partial catalog.
@@ -340,6 +380,25 @@ The key is never logged. A redaction filter on the logging config asserts this.
 9. Run `scripts/smoke.sh` and report pass/fail
 
 ## 7. Acceptance criteria
+
+### 7.1 Local target — the MVP gate
+
+| # | Criterion |
+|---|---|
+| L1 | `scripts/dev-local.sh` starts Ollama and the control plane; `GET /healthz` returns 200 |
+| L2 | Any `/v1` or `/admin` request without a valid bearer token returns 401 |
+| L3 | `curl -N` on a streaming completion emits the first `data:` frame within 3 s and frames arrive incrementally (verify with `--trace-time`) |
+| L4 | `POST /admin/models/qwen3.8-27b/activate` returns 202; `/admin/state` goes `loading` → `ready`; the switch completes within the advertised window |
+| L5 | After a switch, `GET /api/ps` on the Ollama daemon shows **exactly one** loaded model |
+| L6 | During a switch, `/v1/chat/completions` returns 503 `model_loading` with `Retry-After` — never a hang or a 500 |
+| L7 | Requesting a model that is not active returns 409 `model_not_active` with the active id in `details` |
+| L8 | Killing the Ollama daemon puts `/admin/state` into `error` within 5 s; the control plane stays up |
+| L9 | Client disconnect mid-stream cancels the upstream request within 2 s |
+| L10 | A concurrent second activation returns 409 `activation_in_progress` |
+| L11 | `/admin/state.gpu` is `[]` and this is handled without error |
+| L12 | An invalid `models.yaml` fails startup with a pydantic error naming the bad field |
+
+### 7.2 Azure GPU target (deferred until quota exists)
 
 | # | Criterion |
 |---|---|
