@@ -1,0 +1,55 @@
+name: Bug
+description: Something in the control plane, the proxy, or provisioning misbehaves.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste an API key, hostname, or subscription id. Redact before posting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the failing request and the error envelope you got back.
+      placeholder: |
+        curl -N -H 'Authorization: Bearer ***' https://<host>/v1/chat/completions ...
+        → 500 {"error":{"code":"internal", ...}}
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Cite the contract or spec section if there is one.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - supervisor (activate, drain, watchdog)
+        - streaming proxy (/v1/*)
+        - auth
+        - admin routes
+        - catalog / models.yaml
+        - provisioning (scripts/, deploy/)
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: state
+    attributes:
+      label: "`GET /admin/state` at the time"
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log tail
+      description: "`/admin/logs?source=vllm` or `journalctl -u harness-control`. Redact the key."
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Server version
+      description: From `GET /healthz`, plus the commit sha if you know it.

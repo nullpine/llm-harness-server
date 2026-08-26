@@ -4,10 +4,20 @@ The server side of LLM Harness: a small FastAPI control plane that owns one vLLM
 process at a time on an Azure GPU VM, behind Caddy with automatic TLS. The client
 is [`llm-harness-desktop`](https://github.com/nullpine/llm-harness-desktop).
 
-> ### 💸 This VM costs about **$7/hour** — roughly **$5,000/month** if you leave it on.
-> `scripts/vm-stop.sh` deallocates it. Run it when you are done. Provisioning also
-> configures an Azure auto-shutdown schedule. Treat this as part of the product,
-> not an afterthought.
+> ### 💸 Read this before provisioning anything
+>
+> | | $/hr | 3 hr/day | 24/7 |
+> |---|---:|---:|---:|
+> | H100 on-demand | $6.98 | $628/mo | $5,095/mo |
+> | **H100 spot** ← default | **$1.29** | **$116/mo** | $942/mo |
+>
+> `provision.sh` uses **Spot** by default. `scripts/vm-stop.sh` deallocates the VM;
+> run it when you are done, and provisioning also sets an auto-shutdown schedule.
+>
+> Also worth knowing up front: one person chatting uses ~1–3 % of an H100. The same
+> models from a hosted API run about $2–20/month for heavy personal use. Self-host
+> when you need tenant isolation, a pinned model version, or the harness itself —
+> not to save money. See `docs/adr/0006-spot-instances-and-cost.md`.
 
 ## What it adds on top of vLLM
 

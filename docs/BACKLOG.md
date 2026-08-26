@@ -101,6 +101,9 @@ Nothing runs yet; everything is in place to start.
 - [ ] `logging_config.py` redaction + `test_redaction.py` in both repos
 - [ ] NSG locked to 443 from your IP; verify with `nmap`
 - [ ] `scripts/rotate-key.sh`, `vm-start.sh`, `vm-stop.sh`, Azure auto-shutdown
+- [ ] Spot provisioning (`--priority Spot --eviction-policy Deallocate`); verify
+      the app recovers cleanly from an eviction and `vm-start.sh` reports capacity
+      errors clearly (ADR-0006)
 - [ ] `scripts/smoke.sh` covering the full B-list
 - [ ] `docs/OPERATIONS.md`: OOM, stuck load, orphan GPU process, expired cert
 - [ ] Desktop: idle-chunk timeout, retry on failed message, error envelope → friendly copy
@@ -139,3 +142,6 @@ Kept here so it stays out of the MVP. Roughly in the order it will matter.
 10. Bicep/Terraform for the VM; a systemd template unit per model
 11. Auto-update for the desktop app; code signing and notarization
 12. Scale-to-zero: deallocate the VM on idle, start it from the app
+13. A hosted OpenAI-compatible provider as a second catalog entry — the desktop app
+    already speaks the contract, so pointing it at a hosted endpoint is a config
+    change. Useful as the everyday default with the VM reserved for private work.

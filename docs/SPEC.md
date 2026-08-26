@@ -49,7 +49,9 @@ authenticate a client, and change which model is loaded.
 
 - Multiple models resident at once; request-level routing between models
 - Multi-tenant auth, per-user quotas, usage billing
-- Autoscaling, spot/preemption handling, multi-VM load balancing
+- Autoscaling, multi-VM load balancing, and *graceful* spot-eviction handling
+  (draining, checkpointing, migration). The VM **is** provisioned as Spot per
+  ADR-0006, but an eviction is simply an outage the client recovers from
 - Fine-tuning, LoRA hot-swap, RLHF weight updates
 - Embeddings, reranking, audio, image generation endpoints
 - A web UI (the desktop app is the only client)
@@ -62,15 +64,47 @@ authenticate a client, and change which model is loaded.
 
 | | Choice | Notes |
 |---|---|---|
-| SKU | `Standard_NC40ads_H100_v5` | 1× **H100 NVL, 94 GB**, 40 vCPU, 320 GiB RAM, ~$6.98/hr on-demand. Sibling `NC80adis_H100_v5` doubles it (2× GPU) if you later want both models resident |
+| SKU | `Standard_NC40ads_H100_v5`, **provisioned as Spot** | 1× **H100 NVL, 94 GB**, 40 vCPU, 320 GiB RAM. **$1.29/hr spot vs $6.98/hr on-demand.** Sibling `NC80adis_H100_v5` doubles it (2× GPU) if you later want both models resident |
+| Eviction policy | `Deallocate`, max price = on-demand | Spot eviction stops the VM; it does not delete it. `/mnt/models` and the config survive |
 | OS | Ubuntu 24.04 LTS + NVIDIA driver ≥ 550, CUDA 12.4+ | Use the Azure NVIDIA GPU-optimized image where available |
 | Disk | OS 128 GB Premium SSD + **1 TB Premium SSD v2 mounted at `/mnt/models`** | Weights persist across reboots; do **not** use the ephemeral resource disk |
 | Network | NSG allows 443 from your IP only; 22 via Azure Bastion or your IP | vLLM's 8000 and the control plane's 8080 bind to `127.0.0.1` and are never in the NSG |
 
-**Cost note:** ~$5,000/month if left running. The MVP ships `scripts/vm-start.sh`
-and `scripts/vm-stop.sh` (Azure CLI deallocate) and the README states plainly that
-the VM must be deallocated when idle. Auto-shutdown at a fixed hour is configured
-via Azure DevTest auto-shutdown during provisioning.
+**Cost.** This is the dominant design constraint, so it is stated plainly.
+
+| Configuration | $/hr | 3 hr/day | 24/7 |
+|---|---:|---:|---:|
+| NC40ads H100 v5, on-demand | $6.98 | $628/mo | $5,095/mo |
+| **NC40ads H100 v5, spot** | **$1.29** | **$116/mo** | $942/mo |
+| NV36ads A10 v5, on-demand (smaller models only) | $3.20 | $288/mo | $2,336/mo |
+| NV36ads A10 v5, spot | $0.59 | $53/mo | $431/mo |
+
+Note the ordering: **spot H100 is cheaper than on-demand A10** and far more capable.
+Dropping to a smaller GPU is the wrong lever; spot is the right one.
+
+Three mitigations, all in scope for the MVP:
+
+1. **Provision as Spot** with `--priority Spot --eviction-policy Deallocate
+   --max-price -1`. Eviction gives ~30 s notice and stops the VM. The desktop app
+   already models this — it shows `unreachable` and recovers when the VM returns.
+   For a single-user personal harness, an occasional eviction is an inconvenience,
+   not an outage.
+2. **`scripts/vm-stop.sh`** (Azure CLI deallocate) plus a DevTest auto-shutdown
+   schedule configured during provisioning. A deallocated VM costs only its disks
+   (~$15/mo for 1 TB Premium SSD v2 + OS disk).
+3. **Build against the mock.** The desktop repo's mock server implements the full
+   contract, so the client work — which is most of the work — happens with the VM
+   deallocated.
+
+**Reality check, and it belongs in the spec rather than a footnote:** one person
+chatting uses roughly 1–3 % of an H100's throughput. The same models are available
+from hosted providers at ~$0.06/M input and ~$0.40/M output, which puts a heavy
+personal workload in the range of $2–20/month. Self-hosting is the right call when
+you need data to stay in your own tenant, a pinned model version, flat cost under
+heavy agentic load, or — as here — the harness itself is the point. It is not the
+cheaper option for one user, and the project should not pretend otherwise.
+
+See ADR-0006.
 
 ### 4.2 Models (MVP catalog)
 

@@ -1,0 +1,36 @@
+name: Task
+description: A backlog item, sized to one PR.
+labels: ["task"]
+body:
+  - type: input
+    id: milestone
+    attributes:
+      label: Backlog item
+      description: The line from docs/BACKLOG.md this tracks.
+      placeholder: "M1 — supervisor/state.py state machine, exhaustively tested, no I/O"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What this PR does, and what it deliberately leaves for later.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: The acceptance criterion from SPEC §7 (B1–B14), or a concrete test.
+      placeholder: "B11 — a concurrent second activation returns 409 activation_in_progress"
+    validations:
+      required: true
+  - type: checkboxes
+    id: guards
+    attributes:
+      label: Guard rails this touches
+      options:
+        - label: Spawns or kills a process — must go through `supervisor/process.py`
+        - label: Touches `/v1/*` — must not buffer (see `.claude/rules/streaming.md`)
+        - label: Changes `docs/API-CONTRACT.md` — needs a paired PR in the desktop repo
+        - label: Could leave the $7/hour VM running

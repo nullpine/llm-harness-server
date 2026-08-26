@@ -1,0 +1,16 @@
+# The MVP deploys with systemd, not containers (docs/SPEC.md §5.6). This file
+# exists so an ad-hoc `docker build` never sweeps up a venv, a cache, or a key.
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.local/
+docs/
+tests/
