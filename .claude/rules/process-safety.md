@@ -1,7 +1,7 @@
 ---
 description: Rules for spawning, killing, and tracking the single vLLM process
 paths:
-  - "src/harness_control/supervisor/**"
+  - "src/harness_control/supervisor/backends/vllm.py"
   - "deploy/systemd/**"
   - "scripts/**"
   - "tests/test_supervisor_activate.py"
@@ -10,9 +10,12 @@ paths:
 
 # Process safety — exactly one vLLM, and no leaked GPU memory
 
+Applies to the `vllm` backend. The `ollama` and `remote_openai` backends own no
+processes and no VRAM — see `docs/BACKENDS.md`.
+
 ## One process, one owner
 
-Every spawn and kill goes through `supervisor/process.py`. No `subprocess.Popen`
+Every spawn and kill goes through `supervisor/backends/vllm.py`. No `subprocess.Popen`
 or `asyncio.create_subprocess_exec` anywhere else in the package.
 
 ## Killing must actually kill

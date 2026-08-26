@@ -38,7 +38,10 @@ Nothing runs yet; everything is in place to start.
 - [ ] `settings.py`, `errors.py`, `catalog.py` with `models.yaml` validation
 - [ ] `auth.py` bearer dependency + `GET /healthz`
 - [ ] `supervisor/state.py` state machine, exhaustively tested, no I/O
-- [ ] `supervisor/process.py` spawn/kill a process group; `gpu.py` VRAM polling
+- [ ] `supervisor/backends/base.py` — the Backend Protocol + shared contract tests
+- [ ] `supervisor/backends/ollama.py` — preload, keep_alive unload, `/api/ps` health
+- [ ] `supervisor/backends/vllm.py` — process group spawn/kill, VRAM release (written to spec, not exercised until GPU quota)
+- [ ] `supervisor/backends/remote.py` — no-op activate/stop, `/v1/models` health
 - [ ] `routes/openai.py` + `proxy.py` streaming relay against `fake_vllm`
 - [ ] `GET /v1/models`, `GET /admin/state`
 - [ ] `tests/fake_vllm.py` + `test_proxy_streaming.py` (asserts incremental arrival)
@@ -53,7 +56,7 @@ Nothing runs yet; everything is in place to start.
 - [ ] Window with security hardening, preload bridge, empty React shell
 - [ ] Settings modal with Test connection working end to end
 
-**Exit (server):** B2, B3, B4 from `SPEC.md` §7.
+**Exit (server):** L1, L2, L3 (see SPEC §7.1).
 **Exit (desktop):** A1, A8, A9 from `SPEC.md` §10.
 
 ---
@@ -76,7 +79,7 @@ Nothing runs yet; everything is in place to start.
 - [ ] Conversation sidebar: create, list, rename, delete, date grouping
 - [ ] Reasoning block (collapsed `Thinking`)
 
-**Exit (server):** B5, B6, B7, B11, B12.
+**Exit (server):** L4–L11.
 **Exit (desktop):** A2, A3, A7, A10, A12.
 
 ---
@@ -107,6 +110,9 @@ Nothing runs yet; everything is in place to start.
 - [ ] `scripts/smoke.sh` covering the full B-list
 - [ ] `docs/OPERATIONS.md`: OOM, stuck load, orphan GPU process, expired cert
 - [ ] Desktop: idle-chunk timeout, retry on failed message, error envelope → friendly copy
+- [ ] Azure GPU path: `provision.sh`, Caddy, systemd, spot provisioning — gated on
+      pay-as-you-go + `NCADS_H100_v5` standard **and** spot quota. Verified against
+      SPEC §7.2 when hardware exists
 
 **Exit:** B1, B8, B9, B10, B13, B14.
 
