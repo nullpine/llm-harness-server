@@ -56,7 +56,11 @@ def guard_state(supervisor: Supervisor, requested_model: str | None) -> None:
     """
     state = supervisor.state
     if state in LOADING_STATES:
-        retry_after = supervisor.estimated_seconds(supervisor.active_model_id or "") or 10
+        # The incoming model, not the active one: mid-switch there is no active
+        # model, and answering "10" when the catalog says 35 sends the client
+        # back three times too early.
+        loading = supervisor.pending_model_id or supervisor.active_model_id or ""
+        retry_after = supervisor.estimated_seconds(loading) or 10
         raise AppError(
             ErrorCode.MODEL_LOADING,
             "a model is loading; retry shortly",
@@ -124,25 +128,43 @@ async def relay_chat_completions(
         return await _upstream_error_response(upstream)
 
     return StreamingResponse(
-        _relay(upstream, url),
+        _relay(upstream, url, supervisor),
         status_code=upstream.status_code,
         media_type="text/event-stream",
         headers=dict(STREAM_HEADERS),
     )
 
 
-async def _relay(upstream: httpx.Response, url: str) -> AsyncIterator[bytes]:
-    """The relay itself. `aiter_raw` in, bytes out, `aclose` guaranteed."""
-    try:
-        # aiter_raw: no decoding and no line buffering. aiter_text or aiter_lines
-        # here is the bug this whole module exists to prevent.
-        async for chunk in upstream.aiter_raw():
-            yield chunk
-    finally:
-        # Runs on client disconnect too — GeneratorExit and CancelledError both
-        # unwind through here — which is what cancels the upstream generation.
-        await upstream.aclose()
-        log.debug("relay to %s closed", url)
+async def _relay(
+    upstream: httpx.Response, url: str, supervisor: Supervisor
+) -> AsyncIterator[bytes]:
+    """The relay itself. `aiter_raw` in, bytes out, `aclose` guaranteed.
+
+    Wrapped in the supervisor's in-flight counter so a model switch can drain
+    real work instead of guessing. The counter is released in `__aexit__`, which
+    runs on an abort as well as on completion — a client hanging up mid-switch
+    must not stall the drain for its full timeout.
+    """
+    completed = False
+    async with supervisor.track_request():
+        try:
+            # aiter_raw: no decoding and no line buffering. aiter_text or
+            # aiter_lines here is the bug this whole module exists to prevent.
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+            completed = True
+        finally:
+            # Runs on client disconnect too — GeneratorExit and CancelledError
+            # both unwind through here — which is what cancels the upstream
+            # generation.
+            await upstream.aclose()
+            if completed:
+                log.debug("relay to %s closed", url)
+            else:
+                # INFO, not DEBUG: an abort is a real, rare event, and at the
+                # default level it was previously invisible — which made
+                # acceptance L9 impossible to confirm by reading logs.
+                log.info("relay to %s aborted by the client; upstream cancelled", url)
 
 
 async def _buffered_response(upstream: httpx.Response) -> JSONResponse:

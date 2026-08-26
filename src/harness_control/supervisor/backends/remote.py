@@ -59,6 +59,17 @@ class RemoteOpenAIBackend:
         except BackendError:
             return False
 
+    async def await_released(self, timeout_s: float) -> None:
+        """Nothing was held, so nothing has to be freed."""
+        del timeout_s
+
+    async def is_available(self, spec: ModelSpec) -> bool:
+        """Whether the provider still lists it. There is nothing to fetch."""
+        try:
+            return spec.model_ref in await self._list_models()
+        except BackendError:
+            return False
+
     async def progress_hint(self) -> str | None:
         """Activation is instant, so there is never progress to report."""
         return None

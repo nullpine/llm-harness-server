@@ -47,9 +47,35 @@ class Backend(Protocol):
     async def resources(self) -> list[ResourceInfo]:
         """GPU/accelerator state. May be empty — that is valid."""
 
+    async def await_released(self, timeout_s: float) -> None:
+        """Block until what the last activation held has actually been freed.
+        Raises BackendError if it is still held at timeout_s."""
+
+    async def is_available(self, spec: ModelSpec) -> bool:
+        """Whether this model can be served without first fetching it."""
+
     async def aclose(self) -> None:
         """Release transport resources (HTTP clients, pipes). Idempotent."""
 ```
+
+`await_released()` is the generalisation of vLLM's `wait_for_vram_release()`. On
+`ollama` it polls `/api/ps` until the old tag is gone; on `remote_openai` it is a
+no-op.
+
+It is a **correctness guard, not a memory-safety one.** The local machine holds
+48 GB, so GLM (~18 GB) and Qwen (~16 GB) both fit — a load overlapping an
+incomplete unload does not thrash. It quietly succeeds, and leaves two models
+resident while `/admin/state` reports one active. The single-active invariant is
+then false and nothing surfaces it, which is exactly why the check has to be
+explicit rather than left to memory pressure to reveal.
+
+For the same reason `OLLAMA_MAX_LOADED_MODELS=1` is asserted at startup and the
+control plane refuses to start without it: on a machine with room to spare, a
+wrong value has no symptom at all.
+
+`is_available()` answers "can this be served without a fetch" — for `ollama`,
+`/api/tags`. Note it is *not* `/api/ps`: that lists what is loaded right now, so
+using it would report every non-active model as unavailable.
 
 `aclose()` is not `stop()`. `stop()` unloads the model; `aclose()` releases what the
 backend object itself holds. The supervisor calls it whenever it discards a backend,

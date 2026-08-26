@@ -37,11 +37,22 @@ def write(tmp_path: Path, text: str) -> Path:
 
 def test_loads_the_shipped_catalog() -> None:
     catalog = load_catalog(SHIPPED_CATALOG)
-    assert catalog.ids == ["glm-4.7-flash"], "M2 adds Qwen; M1 ships exactly one model"
-    spec = catalog.get("glm-4.7-flash")
-    assert spec is not None
-    assert spec.backend == "ollama"
-    assert spec.model_ref == "glm-4.7-flash:q4_K_M"
+    assert catalog.ids == ["glm-4.7-flash", "qwen3.8-27b"]
+
+    glm = catalog.get("glm-4.7-flash")
+    assert glm is not None
+    assert glm.backend == "ollama"
+    assert glm.model_ref == "glm-4.7-flash:q4_K_M"
+
+    qwen = catalog.get("qwen3.8-27b")
+    assert qwen is not None
+    assert qwen.model_ref == "qwen3.8:27b-q4_K_M"
+
+
+def test_every_shipped_model_advertises_a_load_time() -> None:
+    """The desktop app shows this in its switch dialog, so zero is a broken promise."""
+    for spec in load_catalog(SHIPPED_CATALOG).specs:
+        assert spec.estimated_load_seconds > 0, spec.id
 
 
 def test_defaults_are_applied_to_entries_that_omit_the_field(tmp_path: Path) -> None:

@@ -128,6 +128,33 @@ class VllmBackend:
             return False
         return response.is_success
 
+    async def await_released(self, timeout_s: float) -> None:
+        """Wait for the VRAM to actually come back before the next spawn.
+
+        The original of the pattern the Protocol generalises: a vLLM process that
+        has exited can still hold 30+ GB while the driver tears the context down,
+        and spawning into that OOMs (`.claude/rules/process-safety.md`).
+        """
+        try:
+            await gpu.wait_for_vram_release(timeout_s=timeout_s)
+        except TimeoutError as exc:
+            raise BackendError(str(exc)) from exc
+
+    async def is_available(self, spec: ModelSpec) -> bool:
+        """Whether the weights are already on disk.
+
+        A Hugging Face repo that has not been downloaded is still *servable* —
+        vLLM will fetch it — but not without a long wait, which is exactly what
+        the desktop app wants to warn about. `scripts/download-models.sh` is what
+        makes this true ahead of time.
+        """
+        cache = os.environ.get("HF_HOME")
+        if not cache:
+            return False
+        # HF lays repos out as models--org--name under the hub directory.
+        marker = f"models--{spec.model_ref.replace('/', '--')}"
+        return (Path(cache) / "hub" / marker).exists()
+
     async def progress_hint(self) -> str | None:
         """The most recent line that looks like load progress, if any."""
         for line in reversed(self._logbuf.tail(50)):

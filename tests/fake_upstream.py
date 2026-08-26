@@ -28,6 +28,7 @@ Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 
 DEFAULT_MODEL = "glm-4.7-flash:q4_K_M"
+SECOND_MODEL = "qwen3.8:27b-q4_K_M"
 
 
 def sse_frames(words: list[str], *, completion_id: str = "chatcmpl-fake") -> list[bytes]:
@@ -88,6 +89,13 @@ class FakeUpstream:
 
     # --- what the control routes say --------------------------------------
     loaded: set[str] = field(default_factory=set)
+    #: Tags pulled to disk, which `/api/tags` reports. Distinct from `loaded`:
+    #: a model can be available without being resident, which is exactly the
+    #: distinction `/admin/models` depends on.
+    pulled: set[str] = field(default_factory=lambda: {DEFAULT_MODEL, SECOND_MODEL})
+    #: How long an unload takes to actually show up in `/api/ps`. Non-zero
+    #: exercises the supervisor's wait-for-release guard.
+    unload_delay_s: float = 0.0
     served_models: set[str] = field(default_factory=lambda: {DEFAULT_MODEL})
     healthy: bool = True
     generate_status: int = 200
@@ -116,6 +124,12 @@ class FakeUpstream:
         elif path == "/api/ps":
             await self._json(
                 send, self.ps_status, {"models": [{"name": n} for n in sorted(self.loaded)]}
+            )
+        elif path == "/api/tags":
+            await self._json(
+                send,
+                self.ps_status,
+                {"models": [{"name": n, "model": n} for n in sorted(self.pulled)]},
             )
         elif path == "/api/version":
             await self._json(send, 200, {"version": "0.0.0-fake"})
@@ -151,7 +165,13 @@ class FakeUpstream:
         keep_alive = payload.get("keep_alive")
         if isinstance(model, str):
             if keep_alive == 0:
-                self.loaded.discard(model)
+                if self.unload_delay_s:
+                    # Ollama's unload is asynchronous; `keep_alive: 0` only asks.
+                    asyncio.get_running_loop().call_later(
+                        self.unload_delay_s, self.loaded.discard, model
+                    )
+                else:
+                    self.loaded.discard(model)
             elif self.pin_on_generate:
                 self.loaded.add(model)
         await self._json(send, 200, {"model": model, "done": True})

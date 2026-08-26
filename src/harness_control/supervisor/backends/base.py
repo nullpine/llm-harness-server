@@ -44,6 +44,30 @@ class Backend(Protocol):
     async def resources(self) -> list[ResourceInfo]:
         """GPU/accelerator state. May be empty — that is valid."""
 
+    async def await_released(self, timeout_s: float) -> None:
+        """Block until what the last activation held has actually been freed.
+
+        The generalisation of vLLM's `wait_for_vram_release()`: on `ollama` it is
+        polling `/api/ps` until the old tag is gone, on `remote_openai` it is
+        nothing at all.
+
+        This is a **correctness guard, not a memory-safety one**. The local
+        machine has enough RAM to hold both models at once, so a load that
+        overlaps an incomplete unload does not thrash — it quietly succeeds, and
+        leaves two models resident while the supervisor reports one active. The
+        single-active invariant is then false and nothing says so. That silence
+        is the whole reason this method exists.
+
+        Raises `BackendError` if the resources are still held at `timeout_s`.
+        Failing the activation is better than proceeding into a state the server
+        is lying about."""
+
+    async def is_available(self, spec: ModelSpec) -> bool:
+        """Whether this model can be served without first fetching it.
+
+        For `ollama` that is "the tag is pulled", which is `/api/tags` — not
+        `/api/ps`, which lists only what is loaded right now."""
+
     async def aclose(self) -> None:
         """Release transport resources (HTTP clients, pipes). Idempotent.
 

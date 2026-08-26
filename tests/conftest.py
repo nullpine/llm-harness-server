@@ -37,6 +37,7 @@ SHIPPED_CATALOG = REPO_ROOT / "deploy" / "config" / "models.yaml"
 API_KEY = "test-key-0123456789abcdefghijklmnop"
 AUTH = {"Authorization": f"Bearer {API_KEY}"}
 MODEL_ID = "glm-4.7-flash"
+SECOND_MODEL_ID = "qwen3.8-27b"
 
 
 class LiveServer:
@@ -65,6 +66,18 @@ async def serve(app: Any, host: str = "127.0.0.1") -> AsyncIterator[LiveServer]:
 
 
 # --------------------------------------------------------------- the upstream
+
+
+@pytest.fixture(autouse=True)
+def single_model_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Declare the daemon correctly configured.
+
+    `app.py` refuses to start unless `OLLAMA_MAX_LOADED_MODELS=1`, because on a
+    machine with spare RAM a wrong value has no symptom — the invariant just
+    quietly stops holding. The suite runs against a fake upstream, so it asserts
+    the same thing a correctly-started daemon would.
+    """
+    monkeypatch.setenv("OLLAMA_MAX_LOADED_MODELS", "1")
 
 
 @pytest.fixture
@@ -151,13 +164,36 @@ async def supervisor(
         await sup.shutdown()
 
 
+async def activate_and_wait(supervisor: Supervisor, model_id: str, timeout_s: float = 10.0) -> None:
+    """Start a switch and wait for it to settle.
+
+    Activation is asynchronous from M2 on, so tests wait on the state machine
+    rather than on the call — the same thing the desktop app does.
+    """
+    job = await supervisor.activate(model_id)
+    if job is None:
+        return  # already active
+
+    # Waiting on the job, not on the state: `activate()` returns before its
+    # background task has run, so the state is still `idle` at this point and a
+    # "while transitioning" loop would exit immediately.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while not job.is_finished:
+        if loop.time() >= deadline:
+            raise AssertionError(
+                f"{model_id} never settled; job={job.status} state={supervisor.state}"
+            )
+        await asyncio.sleep(0.01)
+
+
 @pytest_asyncio.fixture
 async def ready_supervisor(
     supervisor: Supervisor, upstream: FakeUpstream
 ) -> AsyncIterator[Supervisor]:
     """A supervisor with the MVP model actually loaded and `ready`."""
     upstream.loaded.add(DEFAULT_MODEL)
-    await supervisor.activate(MODEL_ID)
+    await activate_and_wait(supervisor, MODEL_ID)
     yield supervisor
 
 
