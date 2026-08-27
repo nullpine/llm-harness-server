@@ -146,7 +146,7 @@ not as a starting default that quietly OOMs on a long conversation.
 
 | | Choice | Notes |
 |---|---|---|
-| Host | Apple Silicon Mac, 32 GB unified memory | runs both spec'd models at 4-bit |
+| Host | Apple Silicon Mac, 48 GB unified memory | holds both spec'd models at 4-bit *simultaneously* — see L5 |
 | Engine | Ollama daemon on `127.0.0.1:11434` | OpenAI-compatible at `/v1`, manages weights itself |
 | Control plane | `127.0.0.1:8080`, no TLS | the desktop app's settings validator already permits `http://localhost` |
 | Auth | bearer key, same as production | keep it — it is the contract, and it makes the local and remote paths identical |

@@ -16,6 +16,7 @@ from harness_control.logging_config import (
     JsonFormatter,
     RedactingFilter,
     configure_logging,
+    log_buffer,
 )
 
 
@@ -144,4 +145,51 @@ def test_configure_logging_installs_the_filter_on_uvicorn_loggers() -> None:
 def test_configure_logging_is_idempotent() -> None:
     configure_logging("INFO", API_KEY)
     configure_logging("INFO", API_KEY)
-    assert len(logging.getLogger().handlers) == 1
+    # Two by design: the stream handler and the ring buffer /admin/logs serves.
+    # Calling twice must not accumulate more.
+    assert len(logging.getLogger().handlers) == 2
+
+
+# --- the ring buffer -----------------------------------------------------------
+
+
+def test_the_ring_buffer_is_redacted_too() -> None:
+    """`/admin/logs` serves this buffer over HTTP, so it needs the same guarantee.
+
+    The buffer is fed by a logging handler that carries the redaction filter, so
+    this holds for anything that logs — not only for call sites that remembered.
+    """
+    configure_logging("DEBUG", API_KEY)
+    log_buffer().clear()
+
+    logging.getLogger("harness_control.test").info("connecting with %s", API_KEY)
+
+    lines = log_buffer().tail(10)
+    assert lines, "the buffer received nothing"
+    assert API_KEY not in "\n".join(lines)
+    assert REDACTED in "\n".join(lines)
+
+
+def test_the_ring_buffer_redacts_a_key_it_was_never_told_about() -> None:
+    configure_logging("DEBUG", API_KEY)
+    log_buffer().clear()
+
+    logging.getLogger("harness_control.test").warning(
+        "upstream said: Authorization: Bearer sk-someone-elses-token-here"
+    )
+
+    assert "sk-someone-elses-token-here" not in "\n".join(log_buffer().tail(10))
+
+
+def test_the_ring_buffer_keeps_useful_content() -> None:
+    """Redaction must not reduce the buffer to noise — it is read to diagnose."""
+    configure_logging("DEBUG", API_KEY)
+    log_buffer().clear()
+
+    logging.getLogger("harness_control.test").info(
+        "activation requested: model=qwen3.8-27b backend=ollama job=act_00000001"
+    )
+
+    joined = "\n".join(log_buffer().tail(10))
+    assert "qwen3.8-27b" in joined
+    assert "act_00000001" in joined

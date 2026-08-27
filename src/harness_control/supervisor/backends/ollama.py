@@ -6,6 +6,7 @@ no directory to manage. "Activate" is a preload with `keep_alive: -1` (pin), and
 """
 
 import asyncio
+import logging
 import os
 from typing import Any
 
@@ -13,6 +14,8 @@ import httpx
 
 from harness_control.catalog import ModelSpec
 from harness_control.supervisor.backends.base import BackendError, ResourceInfo
+
+log = logging.getLogger(__name__)
 
 #: Preloading an 18 GB model is not instant, and `/api/generate` does not return
 #: until the weights are resident. It is still a single request, not a poll.
@@ -108,10 +111,11 @@ class OllamaBackend:
     async def max_loaded_models(self) -> int | None:
         """What the daemon will hold at once, or None if it will not say.
 
-        `OLLAMA_MAX_LOADED_MODELS` defaults to 3. On a 32 GB machine two of these
-        models do not fit, so a daemon started without it will swap the machine
-        into uselessness during a switch — see `docs/BACKENDS.md` §2.1. Asserted
-        at startup rather than assumed.
+        `OLLAMA_MAX_LOADED_MODELS` defaults to 3. This machine has 48 GB, so both
+        models fit at once: a daemon started without it does not thrash, it
+        quietly keeps the old model resident while the supervisor reports one
+        active. That is why this is asserted at startup rather than assumed —
+        the failure is invisible, not loud. See `docs/BACKENDS.md` §2.1.
         """
         try:
             response = await self._client.get(f"{self._url}/api/version", timeout=_QUICK_TIMEOUT_S)
@@ -145,21 +149,43 @@ class OllamaBackend:
 
         released = self._released_ref
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout_s
+        started = loop.time()
+        deadline = started + timeout_s
+        polls = 0
 
         while True:
+            polls += 1
             try:
                 loaded = await self.loaded_models()
-            except BackendError:
+            except BackendError as exc:
                 # The daemon is unreachable, so nothing of ours is resident.
+                log.info("unload wait: daemon unreachable (%s); treating as released", exc)
                 self._released_ref = None
                 return
+
+            elapsed_ms = int((loop.time() - started) * 1000)
             if released not in loaded:
+                log.info(
+                    "unload wait: %r gone after %d poll(s), %d ms",
+                    released,
+                    polls,
+                    elapsed_ms,
+                )
                 self._released_ref = None
                 return
+
+            # Every poll, because this is the wait that silently leaves two
+            # models resident if it is ever wrong.
+            log.debug(
+                "unload wait: /api/ps still lists %r after %d ms (loaded=%s)",
+                released,
+                elapsed_ms,
+                sorted(loaded),
+            )
             if loop.time() >= deadline:
                 raise BackendError(
-                    f"{released!r} was still loaded {timeout_s:.0f}s after being unloaded; "
+                    f"{released!r} was still loaded {timeout_s:.0f}s after being unloaded "
+                    f"({polls} polls of /api/ps, last saw {sorted(loaded)}); "
                     f"refusing to activate another model on top of it"
                 )
             await asyncio.sleep(_UNLOAD_POLL_INTERVAL_S)

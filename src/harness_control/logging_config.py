@@ -12,6 +12,8 @@ import logging.config
 import re
 from typing import Any
 
+from harness_control.logbuf import LogBuffer
+
 REDACTED = "[redacted]"
 
 #: Anything shaped like a bearer token, whether or not it is *our* key. A key that
@@ -83,6 +85,36 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+class LogBufferHandler(logging.Handler):
+    """Mirror every log record into the ring buffer `GET /admin/logs` serves.
+
+    A handler rather than `logbuf.append()` calls scattered through the code,
+    for three reasons: it is backend-agnostic, so the Ollama path gets the same
+    diagnostics the vLLM stdout pump used to provide alone; it cannot be
+    forgotten at a new call site; and it inherits the redaction filter, so the
+    API key cannot reach the buffer even though the buffer is served over HTTP.
+    """
+
+    def __init__(self, buffer: LogBuffer) -> None:
+        super().__init__()
+        self._buffer = buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._buffer.append(self.format(record))
+        except Exception:  # a logging handler must never take the process down
+            self.handleError(record)
+
+
+#: The buffer `/admin/logs` reads. Module-level so the handler and the route are
+#: looking at the same object without threading it through every constructor.
+_logbuf = LogBuffer()
+
+
+def log_buffer() -> LogBuffer:
+    return _logbuf
+
+
 #: The one filter instance, so `configure_logging` and later `add_secret` calls
 #: act on the same object every handler holds.
 _filter = RedactingFilter()
@@ -101,10 +133,17 @@ def configure_logging(level: str = "INFO", api_key: str = "") -> RedactingFilter
     handler.setFormatter(JsonFormatter())
     handler.addFilter(_filter)
 
+    # The same records, kept in memory for /admin/logs. Plain text rather than
+    # JSON: this is read by a person in a modal when a load has just failed.
+    buffered = LogBufferHandler(_logbuf)
+    buffered.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    buffered.addFilter(_filter)
+
     root = logging.getLogger()
     for existing in list(root.handlers):
         root.removeHandler(existing)
     root.addHandler(handler)
+    root.addHandler(buffered)
     root.setLevel(level.upper())
 
     # uvicorn and httpx install their own handlers; the filter has to reach those

@@ -66,23 +66,50 @@ Entirely desktop. Nothing on the server moves; see the desktop backlog.
 
 ---
 
-## M4 — Harden (2 days)
+## M4 — Harden
 
-- [ ] `HARNESS_AUTOLOAD_LAST` — reboot restores the last model
-- [ ] Orphan-process cleanup on startup; `wait_for_vram_release` before every spawn
-- [ ] `logging_config.py` redaction + `test_redaction.py` in both repos
-- [ ] NSG locked to 443 from your IP; verify with `nmap`
+Split, because the two halves are not the same kind of work: one runs on the
+machine in front of you, the other is written against a VM that does not exist.
+
+### M4 (local) — done
+
+- [x] Control-plane lifecycle logging in `/admin/logs`: every activation, drain,
+      unload and failure, with elapsed ms. Previously the buffer was fed only by
+      the vLLM stdout pump, so on the Ollama path the desktop app's "View server
+      logs" — offered exactly when an activation fails — had nothing to show
+- [x] `logging_config.py` redaction + `test_redaction.py`, covering the ring
+      buffer: the API key appears in no record
+- [x] `scripts/smoke.sh` — L1–L11 against a running deployment, pass/fail per
+      criterion, non-zero exit on failure. L3 by frame arrival times, L5 by
+      `/api/ps` during *and* after a switch, L6, L10. L8 behind `--disruptive`
+- [x] `docs/OPERATIONS.md` — the local runbook
+- [x] The aborted-request log in `proxy.py` at INFO rather than DEBUG (done in M2)
+
+### M4 (Azure, deferred — blocked on GPU quota)
+
+**None of this is a gap in the MVP.** The MVP ships on the local Ollama path
+(SPEC §4.3); every item here belongs to a deployment that has no hardware yet,
+gated on a pay-as-you-go subscription plus `NCADS_H100_v5` standard **and** spot
+quota. Deliberate scope, not unfinished work. `docs/BACKENDS.md` §4.1 is the
+migration when quota arrives.
+
+- [ ] `scripts/provision.sh`, Caddy (TLS, `flush_interval -1` on `/v1/*`), the
+      `harness-control` systemd unit with `KillMode=control-group`
+- [ ] Spot provisioning (`--priority Spot --eviction-policy Deallocate`); the app
+      recovers cleanly from an eviction and `vm-start.sh` reports capacity errors
+      clearly (ADR-0006)
 - [ ] `scripts/rotate-key.sh`, `vm-start.sh`, `vm-stop.sh`, Azure auto-shutdown
-- [ ] Spot provisioning (`--priority Spot --eviction-policy Deallocate`); verify
-      the app recovers cleanly from an eviction and `vm-start.sh` reports capacity
-      errors clearly (ADR-0006)
-- [ ] `scripts/smoke.sh` covering the full B-list
-- [ ] `docs/OPERATIONS.md`: OOM, stuck load, orphan GPU process, expired cert
-- [ ] Azure GPU path: `provision.sh`, Caddy, systemd, spot provisioning — gated on
-      pay-as-you-go + `NCADS_H100_v5` standard **and** spot quota. Verified against
-      SPEC §7.2 when hardware exists
+- [ ] NSG locked to 443 from your IP; verify with `nmap`
+- [ ] `HARNESS_AUTOLOAD_LAST` — reboot restores the last model
+- [ ] Orphan-process cleanup on startup; `wait_for_vram_release` before every
+      spawn (vLLM only — the Ollama backend owns no process and no VRAM)
+- [ ] `docs/OPERATIONS.md`: the Azure half — OOM, orphan GPU process, expired
+      cert. Written against a real VM, not guessed
+- [ ] Verify SPEC §7.2 (the B-list) end to end when hardware exists
 
-**Exit:** B1, B8, B9, B10, B13, B14.
+**Exit (local):** L1–L11 green under `scripts/smoke.sh`; a failed activation is
+diagnosable from `/admin/logs` alone.
+**Exit (Azure):** deferred with the rest of the group.
 
 ---
 
