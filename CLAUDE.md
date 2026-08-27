@@ -66,8 +66,10 @@ next load OOMs. Defences, all required:
 ## Working method
 
 - Work one backlog item at a time; each is sized to a single PR.
-- **The whole test suite runs without a GPU.** `tests/fake_vllm.py` stands in for
-  vLLM. Nothing in `tests/` may import torch or require CUDA. If you cannot test
+- **The whole test suite runs without a GPU, and without a daemon.**
+  `tests/fake_upstream.py` stands in for whatever is serving — with three backends
+  there is no single "the engine" to fake. Nothing in `tests/` may import torch or
+  require CUDA. If you cannot test
   something without a GPU, isolate the GPU-touching part behind a thin seam and
   test around it.
 - Shell scripts must be idempotent and `shellcheck` clean. Someone will re-run
@@ -79,7 +81,7 @@ next load OOMs. Defences, all required:
 
 | Command | Does |
 |---|---|
-| `make dev` | uvicorn with reload, pointed at `tests/fake_vllm.py` |
+| `make dev` | `scripts/dev-local.sh` — ollama plus the control plane, with reload |
 | `make test` | pytest, no GPU required |
 | `make lint` | ruff check + ruff format --check + mypy |
 | `make fmt` | ruff format |
@@ -106,7 +108,12 @@ block local work.
 
 ## Cost discipline
 
-This VM is roughly $7/hour. Anything you write that could leave it running —
-a retry loop, a test that provisions, a doc that omits teardown — is a real bill.
-`scripts/vm-stop.sh` is a first-class part of the product, and the README leads
-with the hourly rate.
+The MVP runs locally and costs nothing. This section is about the path that does
+not exist yet, and it is written now so that it is written *before* the first VM.
+
+That VM is roughly $7/hour on demand. Anything you write that could leave it
+running — a retry loop, a test that provisions, a doc that omits teardown — is a
+real bill. `scripts/vm-stop.sh` is a first-class part of the product; it is
+currently a stub, and it must not stay one past the first provisioned VM. The
+README carries the hourly rate in the Azure section, next to the instruction not
+to provision anything yet.

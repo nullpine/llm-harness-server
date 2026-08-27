@@ -381,6 +381,12 @@ The key is never logged. A redaction filter on the logging config asserts this.
 
 ## 7. Acceptance criteria
 
+Two lists, and only one of them is a gate. §7.1 is what the MVP is judged on,
+because it is what the MVP runs on. §7.2 restates the same properties for the Azure
+deployment and is **deferred by choice**, not outstanding work: there is no GPU
+quota, so every B criterion is unrunnable rather than unmet. Nothing in §7.2 is a
+capability §7.1 lacks — see `docs/BACKLOG.md`, *M4 (Azure, deferred)*.
+
 ### 7.1 Local target — the MVP gate
 
 | # | Criterion |
@@ -398,7 +404,11 @@ The key is never logged. A redaction filter on the logging config asserts this.
 | L11 | `/admin/state.gpu` is `[]` and this is handled without error |
 | L12 | An invalid `models.yaml` fails startup with a pydantic error naming the bad field |
 
-### 7.2 Azure GPU target (deferred until quota exists)
+L1–L11 are verified together, from a cold start, by `./scripts/smoke.sh --disruptive`
+— one pass/fail line each, non-zero exit on any failure. L12 is a startup check
+rather than a runtime one, and is covered by `tests/test_catalog.py`.
+
+### 7.2 Azure GPU target — deferred, and unrunnable until quota exists
 
 | # | Criterion |
 |---|---|
@@ -416,6 +426,10 @@ The key is never logged. A redaction filter on the logging config asserts this.
 | B12 | Client disconnect mid-stream kills the upstream vLLM request within 2 s (visible in vLLM's aborted-request log line) |
 | B13 | `nmap` from outside shows only 443 open; 8000 and 8080 are not reachable |
 | B14 | An invalid `models.yaml` fails startup with a pydantic error naming the bad field |
+
+These are held to the same standard as §7.1 when the hardware exists: run in one
+pass, no manual nudges. They are not a promise that the code is ready — `vllm.py`
+and `provision.sh` are written to spec and have never been executed.
 
 ## 8. Observability
 

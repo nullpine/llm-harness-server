@@ -10,14 +10,15 @@ Milestone numbering is shared; contents are per-repo.
 
 Nothing runs yet; everything is in place to start.
 
-- [ ] Create both GitHub repos, private, with the directory trees from
+- [x] Create both GitHub repos, private, with the directory trees from
       `docs/PROJECT-STRUCTURE.md` (empty files with a one-line docstring are fine)
-- [ ] Commit `SPEC.md`, `API-CONTRACT.md`, `PROJECT-STRUCTURE.md`, `CLAUDE.md`,
+- [x] Commit `SPEC.md`, `API-CONTRACT.md`, `PROJECT-STRUCTURE.md`, `CLAUDE.md`,
       `README.md` to each
-- [ ] Toolchain: `package.json` / `pyproject.toml`, lint, format, typecheck, test
+- [x] Toolchain: `package.json` / `pyproject.toml`, lint, format, typecheck, test
       runner — all wired and passing on an empty codebase
-- [ ] CI green on both repos
+- [x] CI green on both repos
 - [ ] GitHub milestones M1–M5 created; the issues below filed against them
+      *(not done — the work was tracked in this file and in PRs instead)*
 
 **Exit:** `npm run typecheck && npm run lint && npm run test` and
 `make lint && make test` both pass on a repo with no features.
@@ -27,18 +28,23 @@ Nothing runs yet; everything is in place to start.
 ## M1 — Serve one model / stand up the shell (2–3 days)
 
 ### server
-- [ ] `settings.py`, `errors.py`, `catalog.py` with `models.yaml` validation
-- [ ] `auth.py` bearer dependency + `GET /healthz`
-- [ ] `supervisor/state.py` state machine, exhaustively tested, no I/O
-- [ ] `supervisor/backends/base.py` — the Backend Protocol + shared contract tests
-- [ ] `supervisor/backends/ollama.py` — preload, keep_alive unload, `/api/ps` health
-- [ ] `supervisor/backends/vllm.py` — process group spawn/kill, VRAM release (written to spec, not exercised until GPU quota)
-- [ ] `supervisor/backends/remote.py` — no-op activate/stop, `/v1/models` health
-- [ ] `routes/openai.py` + `proxy.py` streaming relay against `fake_vllm`
-- [ ] `GET /v1/models`, `GET /admin/state`
-- [ ] `tests/fake_vllm.py` + `test_proxy_streaming.py` (asserts incremental arrival)
-- [ ] `scripts/provision.sh` up to "one model serving over HTTPS"
-- [ ] **First real deploy.** GLM 4.7 Flash answering `curl -N` through Caddy.
+- [x] `settings.py`, `errors.py`, `catalog.py` with `models.yaml` validation
+- [x] `auth.py` bearer dependency + `GET /healthz`
+- [x] `supervisor/state.py` state machine, exhaustively tested, no I/O
+- [x] `supervisor/backends/base.py` — the Backend Protocol + shared contract tests
+- [x] `supervisor/backends/ollama.py` — preload, keep_alive unload, `/api/ps` health
+- [x] `supervisor/backends/vllm.py` — process group spawn/kill, VRAM release (written to spec, not exercised until GPU quota)
+- [x] `supervisor/backends/remote.py` — no-op activate/stop, `/v1/models` health
+- [x] `routes/openai.py` + `proxy.py` streaming relay against a fake upstream
+- [x] `GET /v1/models`, `GET /admin/state`
+- [x] `tests/fake_upstream.py` + `test_proxy_streaming.py` (asserts incremental
+      arrival). Named for the upstream, not for vLLM: with three backends there is
+      no single "the engine" to fake
+- [ ] `scripts/provision.sh` up to "one model serving over HTTPS" — **deferred to
+      M4 (Azure)**, blocked on GPU quota
+- [ ] **First real deploy.** GLM 4.7 Flash answering `curl -N` through Caddy —
+      **deferred to M4 (Azure)**. The local equivalent (L1–L3 through
+      `dev-local.sh`) is green
 
 **Exit (server):** L1, L2, L3 (see SPEC §7.1).
 
@@ -53,8 +59,11 @@ Nothing runs yet; everything is in place to start.
 - [x] `logbuf.py` + `GET /admin/logs`
 - [x] Log an aborted relay at INFO, not DEBUG — a client disconnect now leaves a
       line at the default level, so A3/L9 can be confirmed by reading logs.
-- [ ] `progress_hint` parsed from vLLM/HF output during load
-- [ ] `scripts/download-models.sh`; both models pre-downloaded on the VM
+- [ ] `progress_hint` parsed from vLLM/HF output during load — **deferred to M4
+      (Azure)**. On the ollama path the hint is the phase name, which is what
+      `/admin/state` and the app show today
+- [ ] `scripts/download-models.sh`; both models pre-downloaded on the VM —
+      **deferred to M4 (Azure)**. `dev-local.sh` pulls the ollama tags
 
 **Exit (server):** L4–L11.
 
@@ -93,8 +102,11 @@ gated on a pay-as-you-go subscription plus `NCADS_H100_v5` standard **and** spot
 quota. Deliberate scope, not unfinished work. `docs/BACKENDS.md` §4.1 is the
 migration when quota arrives.
 
-- [ ] `scripts/provision.sh`, Caddy (TLS, `flush_interval -1` on `/v1/*`), the
-      `harness-control` systemd unit with `KillMode=control-group`
+- [ ] `scripts/provision.sh` (a 2-line stub today), Caddy (TLS, `flush_interval -1`
+      on `/v1/*` — `deploy/caddy/Caddyfile.template` is the one deploy file with
+      real content), and filling in the empty placeholders:
+      `deploy/systemd/harness-control.service` (the text is in SPEC §5.6),
+      `deploy/logrotate/harness`, `deploy/config/harness.env.example`
 - [ ] Spot provisioning (`--priority Spot --eviction-policy Deallocate`); the app
       recovers cleanly from an eviction and `vm-start.sh` reports capacity errors
       clearly (ADR-0006)
@@ -115,15 +127,25 @@ diagnosable from `/admin/logs` alone.
 
 ## M5 — Ship (1 day)
 
-- [ ] `electron-builder` dmg that launches on a clean macOS machine
-- [ ] End-to-end run of every acceptance criterion, A1–A12 and B1–B14, recorded
-- [ ] READMEs finished: setup from zero, cost warning, teardown
-- [ ] ADRs written for the decisions actually made
+- [ ] `electron-builder` dmg that launches on a clean macOS machine *(desktop repo)*
+- [x] End-to-end run of every acceptance criterion, recorded — **L1–L11 green in one
+      cold-start `./scripts/smoke.sh --disruptive`**, pasted into the release PR.
+      B1–B14 are unrunnable (no GPU quota); A1–A12 are the desktop repo's
+- [x] README finished: setup from zero, the cost warning where it belongs, and an
+      Azure section that says the path is unbuilt rather than implying otherwise
+- [x] ADRs written for the decisions actually made — 0001–0005 were empty templates
+      marked *proposed*; they now carry the reasoning and are *accepted*
 - [ ] Tag `v0.1.0` in both repos
-- [ ] Post-MVP backlog groomed from everything deferred along the way
+- [x] Post-MVP backlog groomed from everything deferred along the way — see the
+      Deferred list, and *M4 (Azure, deferred)* above
 
-**Exit:** you can hand someone the dmg and the provision script and they get a
-working private LLM.
+**Exit (this repo):** `make lint && make test` clean with no daemon running, and
+L1–L11 green in one run of `scripts/smoke.sh --disruptive` from a cold start.
+
+**Exit (the original, both repos):** you can hand someone the dmg and the provision
+script and they get a working private LLM. Half of that stands: the dmg plus
+`dev-local.sh` gives you a working private LLM on a Mac. The provision script is
+deferred with the rest of the Azure path.
 
 ---
 

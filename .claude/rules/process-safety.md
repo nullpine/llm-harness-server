@@ -43,8 +43,8 @@ the event loop stalls every in-flight stream.
 
 ## Testing
 
-The whole suite runs with **no GPU**. `tests/fake_vllm.py` stands in for vLLM;
-nothing in `tests/` may import torch or require CUDA. If something cannot be tested
+The whole suite runs with **no GPU**. `tests/fake_upstream.py` stands in for the
+engine; nothing in `tests/` may import torch or require CUDA. If something cannot be tested
 without a GPU, isolate it behind a thin seam and test around it.
 
 Full detail: `docs/SPEC.md` §5.2.

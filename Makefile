@@ -1,5 +1,5 @@
 # llm-harness-server — dev entrypoints. See CLAUDE.md § Commands.
-# Everything here runs without a GPU; vLLM is stood in for by tests/fake_vllm.py.
+# Everything here runs without a GPU; the engine is stood in for by tests/fake_upstream.py.
 
 SHELL := /usr/bin/env bash
 VENV  := .venv
@@ -21,9 +21,8 @@ $(BIN)/pytest: pyproject.toml
 	$(UV) pip install --python $(VENV) --editable ".[dev]"
 	@touch $(BIN)/pytest
 
-dev: setup ## uvicorn with reload, pointed at tests/fake_vllm.py
-	set -a; [ -f .env ] && . ./.env; set +a; \
-	$(BIN)/uvicorn harness_control.app:app --reload --host 127.0.0.1 --port 8080
+dev: setup ## the local stack: ollama + control plane with reload (scripts/dev-local.sh)
+	./scripts/dev-local.sh
 
 test: setup ## pytest, no GPU required
 	$(BIN)/pytest

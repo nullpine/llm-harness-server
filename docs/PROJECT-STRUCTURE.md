@@ -67,7 +67,7 @@ llm-harness-server/
 │
 ├── tests/
 │   ├── conftest.py                    # app fixture with a FakeSupervisor
-│   ├── fake_vllm.py                   # aiohttp/uvicorn stub: /health, /v1/*, SSE frames
+│   ├── fake_upstream.py               # uvicorn stub for any backend: /health, /v1/*, SSE frames
 │   ├── test_auth.py
 │   ├── test_catalog.py
 │   ├── test_state_machine.py          # every legal + illegal transition
@@ -129,8 +129,8 @@ llm-harness-server/
 7. `routes/` + `proxy.py` — HTTP surface; `test_proxy_streaming.py` is the one that catches buffering
 8. `deploy/` + `scripts/` — provisioning last, once there is something to provision
 
-`tests/fake_vllm.py` means the entire test suite runs on GitHub Actions with no
-GPU. Nothing in `tests/` may require CUDA.
+`tests/fake_upstream.py` means the entire test suite runs on GitHub Actions with
+no GPU and no daemon. Nothing in `tests/` may require CUDA.
 
 ## Conventions
 
