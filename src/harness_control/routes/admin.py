@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from harness_control.auth import require_api_key
 from harness_control.errors import AppError, ErrorCode
 from harness_control.logbuf import MAX_REQUESTABLE_LINES
+from harness_control.logging_config import log_buffer
 from harness_control.models import (
     ActivateRequest,
     CatalogEntry,
@@ -128,10 +129,14 @@ async def get_job(job_id: str, request: Request) -> JobResponse:
 
 
 @router.get("/logs", response_model=LogsResponse)
-async def get_logs(request: Request, lines: int = 200, source: LogSource = "vllm") -> LogsResponse:
+async def get_logs(lines: int = 200, source: LogSource = "vllm") -> LogsResponse:
     """The tail of the ring buffer, for the desktop app's failure-diagnosis modal."""
     capped = max(1, min(lines, MAX_REQUESTABLE_LINES))
-    return LogsResponse(source=source, lines=_supervisor(request).logbuf.tail(capped))
+    # The control plane's own lifecycle, on every backend. Previously this read a
+    # buffer fed only by the vLLM stdout pump, so on the Ollama path the desktop
+    # app's "View server logs" — offered exactly when an activation fails — had
+    # nothing to show.
+    return LogsResponse(source=source, lines=log_buffer().tail(capped))
 
 
 def _json(status: int, payload: dict[str, object]) -> Response:

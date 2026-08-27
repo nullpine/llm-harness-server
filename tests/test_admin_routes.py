@@ -10,7 +10,7 @@ import asyncio
 import httpx
 import pytest
 
-from conftest import AUTH, MODEL_ID
+from conftest import AUTH, MODEL_ID, activate_and_wait
 from harness_control.supervisor.state import ModelState
 from harness_control.supervisor.supervisor import Supervisor
 
@@ -363,17 +363,25 @@ async def test_admin_jobs_404s_for_an_unknown_id(client: httpx.AsyncClient) -> N
     assert response.status_code == 404
 
 
-async def test_admin_logs_returns_the_ring_buffer(
+async def test_admin_logs_returns_the_control_planes_own_lifecycle(
     client: httpx.AsyncClient, ready_supervisor: Supervisor
 ) -> None:
-    ready_supervisor.logbuf.append("INFO something happened")
+    """The buffer is fed by the logging handler, so every backend populates it.
 
-    response = await client.get("/admin/logs?lines=50&source=control", headers=AUTH)
+    It used to be fed only by the vLLM stdout pump, which meant that on the
+    Ollama path the desktop app's "View server logs" — offered precisely when an
+    activation fails — had nothing to show.
+    """
+    await activate_and_wait(ready_supervisor, "qwen3.8-27b")
+
+    response = await client.get("/admin/logs?lines=200&source=control", headers=AUTH)
 
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "control"
-    assert "INFO something happened" in body["lines"]
+    joined = "\n".join(body["lines"])
+    assert "activation requested" in joined
+    assert "qwen3.8-27b" in joined
 
 
 async def test_admin_logs_rejects_an_unknown_source(client: httpx.AsyncClient) -> None:

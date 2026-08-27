@@ -23,7 +23,8 @@ during M1 verification:
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 
 from harness_control.catalog import Catalog, ModelSpec
 from harness_control.logbuf import LogBuffer
@@ -233,6 +234,15 @@ class Supervisor:
         self._progress_hint = "finishing in-flight replies"
         self._pending_model_id = model_id
 
+        log.info(
+            "activation requested: model=%s backend=%s model_ref=%s job=%s from=%s",
+            spec.id,
+            spec.backend,
+            spec.model_ref,
+            job.job_id,
+            self._active_model_id or "nothing",
+        )
+
         self._activation = asyncio.create_task(self._activation_task(spec, job))
         return job
 
@@ -252,9 +262,19 @@ class Supervisor:
         try:
             await self._run_activation(spec)
         except (BackendError, TimeoutError) as exc:
+            # The phase is the first thing a reader of /admin/logs wants: a 404 while
+            # preloading is a bad model_ref, the same 404 while draining is not.
+            log.error(
+                "activation of %s failed during '%s' (%s): %s "
+                "— state stays 'error' until a client activates a model "
+                "(no automatic retry — ADR-0005)",
+                spec.id,
+                self._progress_hint or "unknown phase",
+                type(exc).__name__,
+                exc,
+            )
             self._fail(str(exc))
             job.fail(str(exc), self._log_tail())
-            log.error("activation of %s failed: %s", spec.id, exc)
         except Exception as exc:  # a bug, not a backend failure — still not fatal
             self._fail(f"unexpected error: {exc}")
             job.fail(str(exc), self._log_tail())
@@ -271,23 +291,37 @@ class Supervisor:
         returning, so no request can slip through between the 202 and the first
         tick of this task.
         """
+        started = time.monotonic()
+
         # New requests are already refused — the proxy's guard keys off state.
         # In-flight ones get to finish.
+        drained = self._in_flight
         await self._drain()
+        log.info(
+            "drain complete after %d ms (%d request(s) were in flight)",
+            _ms_since(started),
+            drained,
+        )
 
         self._progress_hint = "unloading the previous model"
+        unload_started = time.monotonic()
         await self._stop_current()
+        log.info("unload complete after %d ms", _ms_since(unload_started))
 
         backend = self._make_backend(spec)
         self._backend = backend
         self._backend_name = spec.backend
         self._transition(ModelState.LOADING)
         self._progress_hint = "loading weights"
+        load_started = time.monotonic()
 
         await backend.activate(spec)
+        log.info(
+            "preload accepted by the %s backend after %d ms", spec.backend, _ms_since(load_started)
+        )
 
         ready = await poll_until(
-            backend.health,
+            self._health_with_logging(backend),
             timeout_s=self._settings.load_timeout_s,
             interval_s=self._settings.health_poll_interval_s,
         )
@@ -303,7 +337,37 @@ class Supervisor:
         self._pending_model_id = None
         self._transition(ModelState.READY)
         self._persist_last_model(spec.id)
-        log.info("model %s is ready on the %s backend", spec.id, spec.backend)
+        log.info(
+            "model %s is ready on the %s backend: load %d ms, switch %d ms total",
+            spec.id,
+            spec.backend,
+            _ms_since(load_started),
+            _ms_since(started),
+        )
+
+    def _health_with_logging(self, backend: Backend) -> Callable[[], Awaitable[bool]]:
+        """Wrap `health()` so a failing poll says *why* rather than just "not yet".
+
+        A load that never becomes ready is the hardest thing to diagnose without
+        shell access, and "waited 900s" on its own tells nobody anything.
+        """
+        attempts = 0
+
+        async def probe() -> bool:
+            nonlocal attempts
+            attempts += 1
+            try:
+                healthy = await backend.health()
+            except Exception as exc:
+                log.warning("health poll %d failed: %s", attempts, exc)
+                return False
+            if not healthy and attempts % 5 == 1:
+                # Every poll would be noise on a 900 s timeout; every fifth is a
+                # heartbeat that shows the wait is progressing.
+                log.info("health poll %d: not serving yet", attempts)
+            return healthy
+
+        return probe
 
     async def _drain(self) -> None:
         """Let in-flight completions finish, up to `HARNESS_DRAIN_TIMEOUT_S`.
@@ -397,7 +461,11 @@ class Supervisor:
             except Exception:  # the health check itself failing is a death too
                 healthy = False
             if not healthy:
-                log.error("backend for %s stopped answering", self._active_model_id)
+                log.error(
+                    "watchdog: backend for %s stopped answering; moving to error "
+                    "(no automatic restart — ADR-0005)",
+                    self._active_model_id,
+                )
                 self._fail("the model backend stopped responding")
 
     def _persist_last_model(self, model_id: str) -> None:
@@ -459,3 +527,7 @@ class _InFlight:
 
     async def __aexit__(self, *_exc: object) -> None:
         self._supervisor._in_flight -= 1
+
+
+def _ms_since(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)

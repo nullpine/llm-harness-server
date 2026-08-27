@@ -355,6 +355,29 @@ async def test_a_backend_failure_lands_in_error_with_a_reason(
     assert "500" in payload.last_error
 
 
+async def test_a_failure_is_diagnosable_from_the_log_alone(
+    supervisor: Supervisor, upstream: FakeUpstream, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The M4 bar: /admin/logs must explain a failed activation without shell access.
+
+    Whoever reads it is looking at a screenshot of the desktop app's log pane and
+    cannot ssh anywhere, so the one ERROR line has to carry the model, the phase it
+    died in, the backend's own words, and the fact that nothing will retry.
+    """
+    upstream.generate_status = 500
+    with caplog.at_level("ERROR", logger="harness_control.supervisor.supervisor"):
+        await activate_and_wait(supervisor, MODEL_ID)
+
+    failures = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(failures) == 1
+    message = failures[0].getMessage()
+
+    assert MODEL_ID in message
+    assert "loading weights" in message  # the phase, not just "failed"
+    assert "500" in message  # what the backend actually said
+    assert "ADR-0005" in message  # and that it will sit in error until asked again
+
+
 async def test_a_model_that_never_becomes_ready_times_out(
     supervisor: Supervisor, upstream: FakeUpstream
 ) -> None:
