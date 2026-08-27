@@ -6,8 +6,8 @@ front of it. The client is
 [`llm-harness-desktop`](https://github.com/nullpine/llm-harness-desktop).
 
 The inference engine is pluggable. **Today it runs Ollama on an Apple Silicon Mac
-— no cloud, no cost.** vLLM on an Azure H100 behind Caddy is the documented future
-and is written to spec, waiting on GPU quota; it has never been run. The HTTP
+— no cloud, no cost.** The vLLM backend is implemented and tested; what is missing
+for an Azure H100 deployment is the provisioning tooling, not the code. The HTTP
 contract is identical either way — see `docs/BACKENDS.md` and
 `docs/adr/0007-pluggable-inference-backends.md`.
 
@@ -86,18 +86,34 @@ make dev        # scripts/dev-local.sh — the real local stack
 make smoke HOST=http://127.0.0.1:8080
 ```
 
-## The Azure GPU path — not built
+## The Azure GPU path — the code exists, the provisioning does not
 
-There is no GPU quota, so this path has never existed — and the tooling for it is
-not written. `scripts/provision.sh`, `vm-start.sh`, `vm-stop.sh` and
-`rotate-key.sh` are **two-line stubs**; `docs/DEPLOY.md` is a stub; in `deploy/`
-only the Caddyfile template has content. What *is* real is `supervisor/backends/vllm.py`,
-written to spec against `docs/SPEC.md` §5 and covered by the shared backend
-contract tests — it has simply never been run on a GPU.
+There is no GPU quota, so this has never run on hardware. Two different things are
+missing, and they are missing to very different degrees.
+
+**The `vllm` backend is real code.** `supervisor/backends/vllm.py` is 278 lines
+implementing the same `Backend` interface as `ollama` — spawn with a process
+group, SIGTERM then SIGKILL the group, wait for the port, wait for VRAM, parse the
+load progress out of the log. `tests/test_backends.py` runs the shared contract
+suite against **every registered backend**, `vllm` included, and adds six
+vllm-specific tests; the fake upstream doubles as a stand-in `vllm` binary, so the
+spawn, the process-group kill and the port-free wait are exercised as real code
+paths. Even the `nvidia-smi` parser has a unit test against a real row.
+
+What no test can reach: vLLM's actual CLI accepting those flags, real weights
+loading, and `wait_for_vram_release` watching VRAM genuinely come back. That is
+what "not exercised until GPU quota exists" means — not that the code is a sketch.
+
+**The deployment tooling does not exist.** `scripts/provision.sh`, `vm-start.sh`,
+`vm-stop.sh`, `rotate-key.sh`, `download-models.sh`, `install-nvidia.sh`,
+`mount-data-disk.sh` and `tail-logs.sh` are **two-line stubs**. `docs/DEPLOY.md` is
+one line. In `deploy/`, only `caddy/Caddyfile.template` has content — the systemd
+unit, the logrotate config and the env example are empty files. Nothing here is
+written-but-unrun; it is unwritten.
 
 `docs/BACKENDS.md` §4.1 is the migration when quota arrives; `docs/BACKLOG.md`
-tracks the rest under *M4 (Azure, deferred)*. Deliberate scope, not unfinished
-work — but do not mistake it for something you can provision today.
+tracks the tooling under *M4 (Azure, deferred)*. Deliberate scope, not unfinished
+work — but there is no script to run today.
 
 The intended shape:
 
@@ -135,7 +151,7 @@ Only 443 open; the engine never reachable from outside the VM.
 | `docs/OPERATIONS.md` | the local runbook: startup refusals, stuck loads, a daemon that died |
 | `docs/BACKLOG.md` | what is done, what is deferred, and why |
 | `docs/adr/` | why one model at a time, why no crash-loop restart, why pluggable backends |
-| `docs/DEPLOY.md` | *stub* — the Azure runbook, unwritten because the path is unbuilt |
+| `docs/DEPLOY.md` | *stub* — the Azure runbook, unwritten because the provisioning is |
 | `CLAUDE.md` | working instructions for AI contributors |
 
 ## Security posture (MVP)

@@ -428,8 +428,10 @@ rather than a runtime one, and is covered by `tests/test_catalog.py`.
 | B14 | An invalid `models.yaml` fails startup with a pydantic error naming the bad field |
 
 These are held to the same standard as §7.1 when the hardware exists: run in one
-pass, no manual nudges. They are not a promise that the code is ready — `vllm.py`
-and `provision.sh` are written to spec and have never been executed.
+pass, no manual nudges. Note what stands between here and there. `vllm.py` is
+implemented and covered by the shared backend contract suite, so most B criteria
+are testing code that exists; `provision.sh` is a two-line stub, so **B1 is not a
+criterion that could fail today — it is work that has not started**.
 
 ## 8. Observability
 

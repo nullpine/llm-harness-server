@@ -124,11 +124,16 @@ nothing on this path needs it.
 
 ## The Azure path
 
-**Not built.** `scripts/provision.sh`, the Caddy config, the systemd unit, spot
-eviction handling, auto-shutdown, the NSG rules, key rotation, and reboot recovery
-are all written against a deployment that has never existed, because there is no
-GPU quota yet. Do not follow them as a runbook: none of it has been run, and
-nothing above this line applies to it.
+**There is no runbook, because there is no deployment.** `scripts/provision.sh`,
+`vm-start.sh`, `vm-stop.sh` and `rotate-key.sh` are two-line stubs; the systemd
+unit, the logrotate config and the env example in `deploy/` are empty files; spot
+eviction handling, auto-shutdown, the NSG rules and reboot recovery are unwritten.
+Nothing above this line applies to that path.
+
+The `vllm` backend itself is a different matter — `supervisor/backends/vllm.py` is
+implemented and covered by the shared contract suite (`docs/BACKENDS.md` §4.1).
+The gap is the tooling to stand a VM up, and the fact that none of it has met a
+GPU.
 
 This is deliberate scope, not unfinished work — `docs/BACKLOG.md` lists it under
 **M4 (Azure, deferred)**. When quota arrives, `docs/BACKENDS.md` §4.1 is the

@@ -203,19 +203,33 @@ your Mac to the VM and takes vLLM with it.
 both `Standard NCADS_H100_v5 Family vCPUs` **and** the separate spot vCPU quota.
 Start this before you need it.
 
-> **Nothing on this path is built yet.** `scripts/provision.sh` is a two-line stub,
-> as are `vm-start.sh`, `vm-stop.sh`, `rotate-key.sh`, `download-models.sh`,
+> **What is missing here is the provisioning, not the backend.**
+>
+> **`supervisor/backends/vllm.py` is implemented and tested.** It satisfies §1's
+> `Backend` contract, and `tests/test_backends.py` runs the shared suite against
+> every registered backend — `vllm` among them — plus six vllm-specific tests
+> covering the argv it builds, the process-group kill, a missing binary, health
+> after the process dies, and the progress hint. The fake upstream stands in for
+> the `vllm` binary, so spawn, kill and the port-free wait are real code paths in
+> CI. What CI cannot reach is vLLM's own CLI, real weights, and
+> `wait_for_vram_release` watching VRAM actually come back.
+>
+> **The deployment tooling is unwritten.** `scripts/provision.sh` is a two-line
+> stub, as are `vm-start.sh`, `vm-stop.sh`, `rotate-key.sh`, `download-models.sh`,
 > `install-nvidia.sh`, `mount-data-disk.sh` and `tail-logs.sh`. In `deploy/`, only
 > `caddy/Caddyfile.template` has content (a test asserts its `flush_interval -1`);
 > `systemd/harness-control.service`, `logrotate/harness` and
 > `config/harness.env.example` are empty placeholders — the systemd unit exists as
 > text in `docs/SPEC.md` §5.6, not as a file. Writing all of this is *M4 (Azure)*
-> in `docs/BACKLOG.md`. **The steps below describe what a migration must do; none
-> of them has ever been run.**
+> in `docs/BACKLOG.md`.
+>
+> So: **step 1 below is the one that does not exist.** Steps 2–7 are configuration
+> against code that is already written, and none of the sequence has been run end
+> to end.
 
 | Step | Change |
 |---|---|
-| 1 | Provision the VM: CUDA driver, vLLM into `/opt/harness/.venv`, weights onto the data disk, the systemd unit, the Caddy site, and a generated API key. The configs in `deploy/` are the target state |
+| 1 | **Not written — this is the work, not a command to run.** Provision the VM: CUDA driver, vLLM into `/opt/harness/.venv`, weights onto the data disk, the systemd unit, the Caddy site, and a generated API key. `deploy/caddy/Caddyfile.template` and SPEC §5.6 are the target state; the rest of `deploy/` is empty placeholders |
 | 2 | In `models.yaml`: `defaults.backend: vllm` **and** `backend: vllm` on each entry, and `model_ref` becomes the HF repo (`zai-org/GLM-4.7-Flash`) |
 | 3 | Set `HARNESS_DEFAULT_BACKEND=vllm` in `/etc/harness/harness.env`. This is not cosmetic: while it says `ollama`, the control plane **refuses to start** unless `OLLAMA_MAX_LOADED_MODELS=1` is in its environment (`app.assert_single_model_daemon`), which on a vLLM VM is a check for a daemon that is not there |
 | 4 | Restore `args:` per model — `--tool-call-parser=glm47`, `--reasoning-parser=glm45`. Not `--served-model-name`: the proxy addresses vLLM by `model_ref`, so renaming it back would 404 (§2.1) |

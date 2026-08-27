@@ -33,7 +33,8 @@ Nothing runs yet; everything is in place to start.
 - [x] `supervisor/state.py` state machine, exhaustively tested, no I/O
 - [x] `supervisor/backends/base.py` — the Backend Protocol + shared contract tests
 - [x] `supervisor/backends/ollama.py` — preload, keep_alive unload, `/api/ps` health
-- [x] `supervisor/backends/vllm.py` — process group spawn/kill, VRAM release (written to spec, not exercised until GPU quota)
+- [x] `supervisor/backends/vllm.py` — process group spawn/kill, VRAM release. Passes
+      the shared contract suite; never run against a GPU
 - [x] `supervisor/backends/remote.py` — no-op activate/stop, `/v1/models` health
 - [x] `routes/openai.py` + `proxy.py` streaming relay against a fake upstream
 - [x] `GET /v1/models`, `GET /admin/state`
