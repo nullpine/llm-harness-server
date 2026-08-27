@@ -67,7 +67,7 @@ llm-harness-server/
 │
 ├── tests/
 │   ├── conftest.py                    # app fixture with a FakeSupervisor
-│   ├── fake_vllm.py                   # aiohttp/uvicorn stub: /health, /v1/*, SSE frames
+│   ├── fake_upstream.py               # uvicorn stub for any backend: /health, /v1/*, SSE frames
 │   ├── test_auth.py
 │   ├── test_catalog.py
 │   ├── test_state_machine.py          # every legal + illegal transition
@@ -122,15 +122,16 @@ llm-harness-server/
 3. `supervisor/backends/base.py` — the `Backend` Protocol and the shared contract tests
 4. `supervisor/backends/ollama.py` — the MVP path; preload, `keep_alive: 0` unload, `/api/ps` health
 5. `supervisor/backends/vllm.py` (spawn/kill the process group, readiness polling,
-   `wait_for_vram_release()`) and `backends/remote.py`. `vllm.py` is written to spec
-   but **not exercised until GPU hardware exists** — it must stay lint- and type-clean
-   and satisfy the shared contract tests, and it must not gate local work
+   `wait_for_vram_release()`) and `backends/remote.py`. `vllm.py` satisfies the shared
+   contract suite like any other backend; what it has **not** met is a GPU — vLLM's
+   own CLI, real weights, and VRAM actually being released. It must stay lint- and
+   type-clean, and it must not gate local work
 6. `supervisor/supervisor.py` — wire it together
 7. `routes/` + `proxy.py` — HTTP surface; `test_proxy_streaming.py` is the one that catches buffering
 8. `deploy/` + `scripts/` — provisioning last, once there is something to provision
 
-`tests/fake_vllm.py` means the entire test suite runs on GitHub Actions with no
-GPU. Nothing in `tests/` may require CUDA.
+`tests/fake_upstream.py` means the entire test suite runs on GitHub Actions with
+no GPU and no daemon. Nothing in `tests/` may require CUDA.
 
 ## Conventions
 

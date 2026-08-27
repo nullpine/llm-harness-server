@@ -1,8 +1,19 @@
 # Changelog
 
-This project has not been released yet. Entries begin at v0.1.0 (milestone M5).
-Until then, `git log` records what changed and `docs/adr/` records why.
+## [0.1.0] — 2026-08-26
 
-Rationale: an Unreleased section that some PRs update and others skip is worse than
-none. The v0.1.0 entry will be a single "initial release" summary, so there is
-nothing to accumulate before M5.
+First release. A control plane for self-hosted open-weights models.
+
+- OpenAI-compatible chat completions with true streaming, over a pluggable
+  backend (Ollama locally, vLLM for GPU deployments, or a remote provider)
+- One model active at a time, switched via `/admin/models/{id}/activate`, with
+  drain, unload verification, and a watchdog
+- Bearer auth on every route except `/healthz`
+- Control-plane lifecycle logging via `/admin/logs`, so a failed activation is
+  diagnosable without shell access
+
+Serves API contract v1.1 (`docs/API-CONTRACT.md`). The contract version and this
+one move independently: `/healthz` reports both.
+
+Deliberately not included: the Azure GPU deployment path (see `docs/BACKENDS.md`
+§4.1 and `docs/BACKLOG.md`), tool calling, vision, embeddings.

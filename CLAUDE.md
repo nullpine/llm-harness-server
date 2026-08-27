@@ -66,8 +66,10 @@ next load OOMs. Defences, all required:
 ## Working method
 
 - Work one backlog item at a time; each is sized to a single PR.
-- **The whole test suite runs without a GPU.** `tests/fake_vllm.py` stands in for
-  vLLM. Nothing in `tests/` may import torch or require CUDA. If you cannot test
+- **The whole test suite runs without a GPU, and without a daemon.**
+  `tests/fake_upstream.py` stands in for whatever is serving — with three backends
+  there is no single "the engine" to fake. Nothing in `tests/` may import torch or
+  require CUDA. If you cannot test
   something without a GPU, isolate the GPU-touching part behind a thin seam and
   test around it.
 - Shell scripts must be idempotent and `shellcheck` clean. Someone will re-run
@@ -79,7 +81,7 @@ next load OOMs. Defences, all required:
 
 | Command | Does |
 |---|---|
-| `make dev` | uvicorn with reload, pointed at `tests/fake_vllm.py` |
+| `make dev` | `scripts/dev-local.sh` — ollama plus the control plane, with reload |
 | `make test` | pytest, no GPU required |
 | `make lint` | ruff check + ruff format --check + mypy |
 | `make fmt` | ruff format |
@@ -90,9 +92,21 @@ next load OOMs. Defences, all required:
 These apply to the **`vllm` backend only** — one of three, alongside `ollama` and
 `remote_openai` (ADR-0007, `docs/BACKENDS.md`).
 
-The MVP runs the `ollama` backend on local hardware. `vllm.py` is written to spec
-but not exercised until GPU quota exists — do not let it rot, and do not let it
-block local work.
+The MVP runs the `ollama` backend on local hardware. `vllm.py` is **implemented and
+covered by tests**, not a sketch: the shared contract suite in
+`tests/test_backends.py` runs against every registered backend including `vllm`,
+and six further tests cover the argv, the process-group kill, a missing binary,
+health after the process dies, and the progress hint — with the fake upstream
+standing in for the `vllm` binary. Treat it as production code.
+
+What is unexercised is narrow and specific: vLLM's own CLI accepting the flags,
+real weights loading, and `wait_for_vram_release` watching VRAM actually come back.
+Do not let it rot, and do not let it block local work.
+
+Separately, and do not conflate the two: the **deployment tooling** for the Azure
+path (`scripts/provision.sh` and the other VM scripts, `docs/DEPLOY.md`, the
+systemd unit, logrotate, the env example) is genuinely unwritten — stubs and empty
+files. That is deferred M4 (Azure) work, not something to fill in opportunistically.
 
 - Pin the exact version in `requirements.lock`. CLI flags move between releases;
   an unpinned upgrade will break `models.yaml` args with no warning.
@@ -106,7 +120,12 @@ block local work.
 
 ## Cost discipline
 
-This VM is roughly $7/hour. Anything you write that could leave it running —
-a retry loop, a test that provisions, a doc that omits teardown — is a real bill.
-`scripts/vm-stop.sh` is a first-class part of the product, and the README leads
-with the hourly rate.
+The MVP runs locally and costs nothing. This section is about the path that does
+not exist yet, and it is written now so that it is written *before* the first VM.
+
+That VM is roughly $7/hour on demand. Anything you write that could leave it
+running — a retry loop, a test that provisions, a doc that omits teardown — is a
+real bill. `scripts/vm-stop.sh` is a first-class part of the product; it is one of
+the unwritten deployment scripts today, and it must not stay one past the first
+provisioned VM. The README carries the hourly rate in the Azure section, next to
+the note that there is no provisioning script to run yet.

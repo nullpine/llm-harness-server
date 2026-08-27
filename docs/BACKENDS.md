@@ -203,17 +203,50 @@ your Mac to the VM and takes vLLM with it.
 both `Standard NCADS_H100_v5 Family vCPUs` **and** the separate spot vCPU quota.
 Start this before you need it.
 
+> **What is missing here is the provisioning, not the backend.**
+>
+> **`supervisor/backends/vllm.py` is implemented and tested.** It satisfies §1's
+> `Backend` contract, and `tests/test_backends.py` runs the shared suite against
+> every registered backend — `vllm` among them — plus six vllm-specific tests
+> covering the argv it builds, the process-group kill, a missing binary, health
+> after the process dies, and the progress hint. The fake upstream stands in for
+> the `vllm` binary, so spawn, kill and the port-free wait are real code paths in
+> CI. What CI cannot reach is vLLM's own CLI, real weights, and
+> `wait_for_vram_release` watching VRAM actually come back.
+>
+> **The deployment tooling is unwritten.** `scripts/provision.sh` is a two-line
+> stub, as are `vm-start.sh`, `vm-stop.sh`, `rotate-key.sh`, `download-models.sh`,
+> `install-nvidia.sh`, `mount-data-disk.sh` and `tail-logs.sh`. In `deploy/`, only
+> `caddy/Caddyfile.template` has content (a test asserts its `flush_interval -1`);
+> `systemd/harness-control.service`, `logrotate/harness` and
+> `config/harness.env.example` are empty placeholders — the systemd unit exists as
+> text in `docs/SPEC.md` §5.6, not as a file. Writing all of this is *M4 (Azure)*
+> in `docs/BACKLOG.md`.
+>
+> So: **step 1 below is the one that does not exist.** Steps 2–7 are configuration
+> against code that is already written, and none of the sequence has been run end
+> to end.
+
 | Step | Change |
 |---|---|
-| 1 | Run `scripts/provision.sh --host harness.example.com` on the VM. It installs vLLM, Caddy, the systemd unit, and downloads weights |
-| 2 | In `models.yaml`: `backend: vllm`, and `model_ref` becomes the HF repo (`zai-org/GLM-4.7-Flash`) |
-| 3 | Restore `args:` per model — `--tool-call-parser=glm47`, `--reasoning-parser=glm45`. Not `--served-model-name`: the proxy addresses vLLM by `model_ref`, so renaming it back would 404 (§2.1) |
-| 4 | Raise `estimated_load_seconds` to the vLLM figures (75 / 110) |
-| 5 | In the desktop app's Settings, change Server URL from `http://localhost:8080` to `https://harness.example.com`, and paste the API key `provision.sh` printed |
+| 1 | **Not written — this is the work, not a command to run.** Provision the VM: CUDA driver, vLLM into `/opt/harness/.venv`, weights onto the data disk, the systemd unit, the Caddy site, and a generated API key. `deploy/caddy/Caddyfile.template` and SPEC §5.6 are the target state; the rest of `deploy/` is empty placeholders |
+| 2 | In `models.yaml`: `defaults.backend: vllm` **and** `backend: vllm` on each entry, and `model_ref` becomes the HF repo (`zai-org/GLM-4.7-Flash`) |
+| 3 | Set `HARNESS_DEFAULT_BACKEND=vllm` in `/etc/harness/harness.env`. This is not cosmetic: while it says `ollama`, the control plane **refuses to start** unless `OLLAMA_MAX_LOADED_MODELS=1` is in its environment (`app.assert_single_model_daemon`), which on a vLLM VM is a check for a daemon that is not there |
+| 4 | Restore `args:` per model — `--tool-call-parser=glm47`, `--reasoning-parser=glm45`. Not `--served-model-name`: the proxy addresses vLLM by `model_ref`, so renaming it back would 404 (§2.1) |
+| 5 | Raise `estimated_load_seconds` to the vLLM figures (75 / 110). The local values (10 / 12) are measured warm loads on Apple Silicon and would make the app's countdown a lie |
+| 6 | Point `HARNESS_MODELS_FILE` at `/etc/harness/models.yaml` and `HARNESS_STATE_DIR` at `/var/lib/harness` — the packaged defaults, which `dev-local.sh` overrides locally |
+| 7 | In the desktop app's Settings, change Server URL from `http://localhost:8080` to `https://harness.example.com`, and paste the API key provisioning printed |
 
 Nothing else. No rebuild of the desktop app, no contract change, no new IPC channel.
 Conversations already on disk keep working; the `modelId` recorded on past messages
 still resolves because the catalog ids are unchanged.
+
+**What changes about verification.** `scripts/smoke.sh` is written against the
+control plane's HTTP surface, so L1–L4 and L6–L11 apply unchanged. **L5 does not**:
+it samples Ollama's `/api/ps`, which does not exist on a vLLM host, so it will
+report `SKIP  L5 — the Ollama daemon … is not reachable from here`. On vLLM the
+equivalent guard is `gpu.wait_for_vram_release()` before every spawn, and SPEC §7.2
+B9 (`nvidia-smi` shows 0 MB after a restart) is the criterion that replaces it.
 
 **What you gain:** FP8 instead of 4-bit, full throughput, tool-call and reasoning
 parsers, and the machine is not your laptop.
