@@ -14,7 +14,8 @@ registry, and the watchdog. A backend owns only *how a model is made to serve*.
 - A backend never sets state. It reports facts; the supervisor decides state.
 - No `if backend.name == "ollama"` branching outside `backends/`. If a caller
   needs to know which backend it has, the interface is missing a method.
-- `proxy.py` reads `backend.base_url` and nothing else about the backend.
+- `proxy.py` asks the *supervisor* for `base_url()` and `upstream_headers()`,
+  and nothing else about the backend. It never touches the backend object.
 - New backends must satisfy the same contract tests. `tests/test_backends.py`
   runs the shared suite against every registered implementation.
 - `docs/API-CONTRACT.md` must never change to accommodate a backend. If a backend

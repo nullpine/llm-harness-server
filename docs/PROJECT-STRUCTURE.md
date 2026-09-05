@@ -75,6 +75,7 @@ llm-harness-server/
 │   ├── test_supervisor_activate.py    # drain, timeout, concurrent activate → 409
 │   ├── test_proxy_streaming.py        # asserts chunks arrive incrementally, not batched
 │   ├── test_proxy_abort.py            # client disconnect cancels upstream
+│   ├── test_proxy_upstream_auth.py    # the relay presents the upstream's key, not ours
 │   ├── test_admin_routes.py
 │   ├── test_errors_contract.py        # every error code matches the contract table
 │   └── test_redaction.py              # the API key never reaches a log record
@@ -92,6 +93,7 @@ llm-harness-server/
 │
 ├── scripts/
 │   ├── dev-local.sh                   # Ollama + control plane on this Mac  ← the MVP path
+│   ├── dev-runpod.sh                  # control plane here, vLLM on a RunPod pod (remote_openai)
 │   ├── provision.sh                   # one-shot fresh-VM setup (idempotent)
 │   ├── install-nvidia.sh              # driver + CUDA, skipped if nvidia-smi already works
 │   ├── mount-data-disk.sh             # format + fstab by UUID → /mnt/models

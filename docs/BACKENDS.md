@@ -54,6 +54,9 @@ class Backend(Protocol):
     async def is_available(self, spec: ModelSpec) -> bool:
         """Whether this model can be served without first fetching it."""
 
+    def upstream_headers(self) -> Mapping[str, str]:
+        """Headers the proxy must add to every /v1 request it relays."""
+
     async def aclose(self) -> None:
         """Release transport resources (HTTP clients, pipes). Idempotent."""
 ```
@@ -72,6 +75,25 @@ explicit rather than left to memory pressure to reveal.
 For the same reason `OLLAMA_MAX_LOADED_MODELS=1` is asserted at startup and the
 control plane refuses to start without it: on a machine with room to spare, a
 wrong value has no symptom at all.
+
+`upstream_headers()` is what the relay needs and cannot work out for itself.
+`ollama` and `vllm` return `{}` — they listen on `127.0.0.1` and authenticate
+nobody. `remote_openai` returns the provider's bearer token, because the upstream
+is somebody else's HTTPS endpoint.
+
+It is **never our own `HARNESS_API_KEY`**. That key authenticates the desktop app
+to us and stops at `auth.py`; forwarding it would hand our credential to a third
+party, where it is also meaningless.
+
+The method exists rather than a branch in `proxy.py` because the boundary rule is
+explicit: if a caller needs to know which backend it has, the interface is missing
+a method. `proxy.py` asks the supervisor for `base_url()` and `upstream_headers()`
+and never touches the backend object.
+
+Without it the failure is the quiet kind this codebase keeps running into: the
+backend authenticates its *own* health probe, the supervisor reports `ready`, and
+every chat completion 401s. `tests/test_proxy_upstream_auth.py` asserts the header
+survives the whole request path, not just the probe.
 
 `is_available()` answers "can this be served without a fetch" — for `ollama`,
 `/api/tags`. Note it is *not* `/api/ps`: that lists what is loaded right now, so
@@ -139,7 +161,20 @@ The thinnest backend. `base_url` points at an external origin; `activate` and `s
 are no-ops beyond verifying the model appears in the upstream `/v1/models`.
 `health` is a `GET /v1/models` with a short timeout. `resources` returns `[]`.
 
-The upstream API key comes from the environment, never from `models.yaml`.
+The upstream API key comes from the environment (`HARNESS_REMOTE_API_KEY`), never
+from `models.yaml`, and reaches the relay through `upstream_headers()` (§1).
+
+**This is the backend a RunPod pod uses.** RunPod's `vllm-latest` template runs
+vLLM itself, so there is no local process for us to own — which makes it
+`remote_openai`, not `vllm`, however much the engine is the same one. `vllm.py`
+spawns and supervises; here we only proxy. `scripts/dev-runpod.sh` is that path:
+it discovers what the pod serves via `/v1/models`, generates a one-entry catalog
+into `.local/`, and runs the control plane on your machine.
+
+The limitation is real and worth stating plainly: **one pod serves one model**, so
+switching between catalog entries is instant and does nothing. Model switching on
+RunPod means either a pod per model, or the control plane running *inside* the pod
+on the `vllm` backend. Neither is built.
 
 Note the asymmetry: with this backend the control plane is a **thin auth and admin
 layer**, not a supervisor. That is fine — the contract is what matters, and holding

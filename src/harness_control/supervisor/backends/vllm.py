@@ -169,6 +169,10 @@ class VllmBackend:
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.returncode is None
 
+    def upstream_headers(self) -> dict[str, str]:
+        """Our own process, bound to 127.0.0.1 (SPEC §5.2). No token to send."""
+        return {}
+
     async def aclose(self) -> None:
         await self.stop()
         if self._owns_client:

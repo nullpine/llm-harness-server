@@ -105,7 +105,7 @@ async def relay_chat_completions(
         "POST",
         url,
         json=outgoing,
-        headers=_forwarded_request_headers(request),
+        headers=_forwarded_request_headers(request, supervisor),
         timeout=STREAM_TIMEOUT,
     )
 
@@ -198,12 +198,19 @@ async def _upstream_error_response(upstream: httpx.Response) -> JSONResponse:
     ).response()
 
 
-def _forwarded_request_headers(request: Request) -> dict[str, str]:
-    """Pass the client's content type through; never pass our bearer token upstream."""
+def _forwarded_request_headers(request: Request, supervisor: Supervisor) -> dict[str, str]:
+    """Pass the client's content type through; never pass our bearer token upstream.
+
+    The upstream's *own* credentials are a different thing and do go: they come
+    from `supervisor.upstream_headers()`, which is `{}` for a local engine and the
+    provider's bearer token for `remote_openai`. Ours would be meaningless there
+    and handing it over would leak it.
+    """
     headers = {"Content-Type": "application/json", "Accept": request.headers.get("accept", "*/*")}
     client_id = request.headers.get("x-harness-client")
     if client_id:
         headers["X-Harness-Client"] = client_id
+    headers.update(supervisor.upstream_headers())
     return headers
 
 

@@ -206,6 +206,10 @@ class OllamaBackend:
         modelling in the MVP (`docs/BACKENDS.md` §2.1). L11 covers the empty case."""
         return []
 
+    def upstream_headers(self) -> dict[str, str]:
+        """The daemon is ours, on 127.0.0.1, and authenticates nobody."""
+        return {}
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()

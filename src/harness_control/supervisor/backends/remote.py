@@ -78,15 +78,26 @@ class RemoteOpenAIBackend:
         """Someone else's hardware. We have no visibility and should not pretend."""
         return []
 
+    def upstream_headers(self) -> dict[str, str]:
+        """The provider's bearer token, for the relay as well as for `/v1/models`.
+
+        Without this the proxy reaches an authenticated upstream — a RunPod pod
+        started with `VLLM_API_KEY` set, or any hosted provider — with no
+        credentials, and every chat completion 401s while `/admin/state` happily
+        says `ready`, because health() had a key and the relay did not.
+        """
+        return {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
 
     async def _list_models(self) -> set[str]:
-        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
             response = await self._client.get(
-                f"{self._url}/v1/models", headers=headers, timeout=_TIMEOUT_S
+                f"{self._url}/v1/models",
+                headers=dict(self.upstream_headers()),
+                timeout=_TIMEOUT_S,
             )
             response.raise_for_status()
             payload = response.json()
