@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from conftest import LiveServer
+from conftest import API_KEY, REMOTE_API_KEY, LiveServer
 from fake_upstream import DEFAULT_MODEL, FakeUpstream
 from harness_control.catalog import ModelSpec
 from harness_control.settings import Settings
@@ -134,6 +134,9 @@ class _ScriptedVllm:
 
     async def resources(self) -> list[ResourceInfo]:
         return await self._inner.resources()
+
+    def upstream_headers(self) -> dict[str, str]:
+        return dict(self._inner.upstream_headers())
 
     async def aclose(self) -> None:
         await self._inner.aclose()
@@ -251,6 +254,18 @@ async def test_is_available_answers_for_a_catalogued_model(harness: Harness) -> 
     assert isinstance(result, bool)
 
 
+def test_upstream_headers_are_a_string_mapping(harness: Harness) -> None:
+    """Whatever a backend sends upstream must be headers the proxy can merge."""
+    headers = harness.backend.upstream_headers()
+    assert dict(headers) == {str(k): str(v) for k, v in headers.items()}
+
+
+def test_upstream_headers_never_leak_our_own_key(harness: Harness) -> None:
+    """`HARNESS_API_KEY` authenticates the desktop app to us and stops there."""
+    sent = " ".join(harness.backend.upstream_headers().values())
+    assert API_KEY not in sent
+
+
 async def test_progress_hint_is_a_string_or_none(harness: Harness) -> None:
     hint = await harness.backend.progress_hint()
     assert hint is None or isinstance(hint, str)
@@ -364,6 +379,25 @@ async def test_remote_sends_the_upstream_key_not_ours(
     backend = RemoteOpenAIBackend(upstream_server.url, api_key="upstream-secret-key")
     await backend.activate(make_spec(DEFAULT_MODEL, "remote_openai"))
     assert await backend.health() is True
+    await backend.aclose()
+
+
+async def test_remote_offers_its_key_to_the_relay_too(upstream_server: LiveServer) -> None:
+    """The relay path needs the same credentials `/v1/models` used.
+
+    Without this the backend authenticates itself, reports `ready`, and every
+    chat completion 401s — a RunPod pod started with `VLLM_API_KEY` set, or any
+    hosted provider.
+    """
+    backend = RemoteOpenAIBackend(upstream_server.url, api_key=REMOTE_API_KEY)
+    assert backend.upstream_headers() == {"Authorization": f"Bearer {REMOTE_API_KEY}"}
+    await backend.aclose()
+
+
+async def test_remote_sends_no_header_when_the_upstream_wants_no_key() -> None:
+    """An empty key means an unauthenticated upstream, not `Bearer `."""
+    backend = RemoteOpenAIBackend("http://upstream.test", api_key="")
+    assert backend.upstream_headers() == {}
     await backend.aclose()
 
 

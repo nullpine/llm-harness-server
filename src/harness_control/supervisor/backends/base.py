@@ -6,6 +6,7 @@ decides policy, and never knows about the state machine — see
 `.claude/rules/backend-boundary.md`.
 """
 
+from collections.abc import Mapping
 from typing import Protocol, TypedDict, runtime_checkable
 
 from harness_control.catalog import ModelSpec
@@ -67,6 +68,23 @@ class Backend(Protocol):
 
         For `ollama` that is "the tag is pulled", which is `/api/tags` — not
         `/api/ps`, which lists only what is loaded right now."""
+
+    def upstream_headers(self) -> Mapping[str, str]:
+        """Headers the proxy must add to every `/v1` request it relays.
+
+        Empty for a backend we own the process of: `ollama` and `vllm` listen on
+        `127.0.0.1` and authenticate nobody. A `remote_openai` upstream is
+        somebody else's HTTPS endpoint and generally wants a bearer token, and
+        the proxy has no way to supply one without asking.
+
+        This exists because the alternative is `proxy.py` branching on
+        `backend.name`, which `.claude/rules/backend-boundary.md` forbids: if a
+        caller needs to know which backend it has, the interface is missing a
+        method. This is that method.
+
+        Never our own `HARNESS_API_KEY` — that authenticates the desktop app to
+        us, and forwarding it would hand our key to a third party.
+        """
 
     async def aclose(self) -> None:
         """Release transport resources (HTTP clients, pipes). Idempotent.

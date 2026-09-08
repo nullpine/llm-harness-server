@@ -75,6 +75,7 @@ llm-harness-server/
 │   ├── test_supervisor_activate.py    # drain, timeout, concurrent activate → 409
 │   ├── test_proxy_streaming.py        # asserts chunks arrive incrementally, not batched
 │   ├── test_proxy_abort.py            # client disconnect cancels upstream
+│   ├── test_proxy_upstream_auth.py    # the relay presents the upstream's key, not ours
 │   ├── test_admin_routes.py
 │   ├── test_errors_contract.py        # every error code matches the contract table
 │   └── test_redaction.py              # the API key never reaches a log record
@@ -84,6 +85,10 @@ llm-harness-server/
 │   │   └── Caddyfile.template
 │   ├── systemd/
 │   │   └── harness-control.service
+│   ├── profiles/                      # one deployment each: values only, no secrets
+│   │   ├── ollama.env
+│   │   ├── runpod.env
+│   │   └── vllm.env
 │   ├── config/
 │   │   ├── models.yaml                # the MVP catalog (GLM 4.7 Flash + Qwen 3.8 27B)
 │   │   └── harness.env.example
@@ -91,7 +96,13 @@ llm-harness-server/
 │       └── harness
 │
 ├── scripts/
-│   ├── dev-local.sh                   # Ollama + control plane on this Mac  ← the MVP path
+│   ├── dev.sh                         # ← the entry point: runs the active deployment profile
+│   ├── profile.sh                     # show or switch the active profile
+│   ├── profiles/                      # per-profile setup: what config alone cannot express
+│   │   ├── ollama.sh                  # start the daemon, pull the tags
+│   │   └── runpod.sh                  # probe the pod, generate its catalog
+│   ├── dev-local.sh                   # thin shim → dev.sh ollama
+│   ├── dev-runpod.sh                  # thin shim → dev.sh runpod
 │   ├── provision.sh                   # one-shot fresh-VM setup (idempotent)
 │   ├── install-nvidia.sh              # driver + CUDA, skipped if nvidia-smi already works
 │   ├── mount-data-disk.sh             # format + fstab by UUID → /mnt/models

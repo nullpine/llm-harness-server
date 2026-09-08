@@ -35,6 +35,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SHIPPED_CATALOG = REPO_ROOT / "deploy" / "config" / "models.yaml"
 
 API_KEY = "test-key-0123456789abcdefghijklmnop"
+#: The *upstream's* key, deliberately different from ours: the two must never
+#: be confused, and an assertion cannot tell them apart if they match.
+REMOTE_API_KEY = "upstream-key-zyxwvutsrqponmlkjihg"
 AUTH = {"Authorization": f"Bearer {API_KEY}"}
 MODEL_ID = "glm-4.7-flash"
 SECOND_MODEL_ID = "qwen3.8-27b"
@@ -123,6 +126,7 @@ def settings(upstream_server: LiveServer, tmp_path: Path) -> Settings:
         default_backend="ollama",
         ollama_url=upstream_server.url,
         remote_base_url=upstream_server.url,
+        remote_api_key=REMOTE_API_KEY,
         state_dir=tmp_path,
         load_timeout_s=10.0,
         health_poll_interval_s=0.02,

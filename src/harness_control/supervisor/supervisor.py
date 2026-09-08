@@ -118,6 +118,16 @@ class Supervisor:
     def base_url(self) -> str | None:
         return self._backend.base_url if self._backend is not None else None
 
+    def upstream_headers(self) -> dict[str, str]:
+        """Headers the proxy adds when relaying, or `{}` with nothing active.
+
+        Paired with `base_url()` so `proxy.py` still asks the supervisor rather
+        than reaching into the backend (`.claude/rules/backend-boundary.md`).
+        """
+        if self._backend is None:
+            return {}
+        return dict(self._backend.upstream_headers())
+
     @property
     def active_model_ref(self) -> str | None:
         """What the *upstream* calls the active model, as opposed to our catalog id.
