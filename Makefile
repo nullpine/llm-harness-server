@@ -8,7 +8,7 @@ UV    ?= uv
 PYTHON_VERSION := 3.12
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev test lint fmt smoke lock clean
+.PHONY: help setup dev profile profiles test lint fmt smoke lock clean
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -21,8 +21,16 @@ $(BIN)/pytest: pyproject.toml
 	$(UV) pip install --python $(VENV) --editable ".[dev]"
 	@touch $(BIN)/pytest
 
-dev: setup ## the local stack: ollama + control plane with reload (scripts/dev-local.sh)
-	./scripts/dev-local.sh
+dev: setup ## Run the control plane on the active deployment profile: make dev [PROFILE=runpod]
+	@PROFILE="$(PROFILE)" ./scripts/dev.sh
+
+profile: ## Show the active deployment profile, or switch it: make profile runpod
+	@./scripts/profile.sh $(filter-out $@,$(MAKECMDGOALS))
+
+# Let `make profile runpod` pass "runpod" through without make treating it as a
+# target of its own. Harmless for every real target, which is matched first.
+%:
+	@:
 
 test: setup ## pytest, no GPU required
 	$(BIN)/pytest

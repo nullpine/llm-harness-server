@@ -85,6 +85,10 @@ llm-harness-server/
 │   │   └── Caddyfile.template
 │   ├── systemd/
 │   │   └── harness-control.service
+│   ├── profiles/                      # one deployment each: values only, no secrets
+│   │   ├── ollama.env
+│   │   ├── runpod.env
+│   │   └── vllm.env
 │   ├── config/
 │   │   ├── models.yaml                # the MVP catalog (GLM 4.7 Flash + Qwen 3.8 27B)
 │   │   └── harness.env.example
@@ -92,8 +96,13 @@ llm-harness-server/
 │       └── harness
 │
 ├── scripts/
-│   ├── dev-local.sh                   # Ollama + control plane on this Mac  ← the MVP path
-│   ├── dev-runpod.sh                  # control plane here, vLLM on a RunPod pod (remote_openai)
+│   ├── dev.sh                         # ← the entry point: runs the active deployment profile
+│   ├── profile.sh                     # show or switch the active profile
+│   ├── profiles/                      # per-profile setup: what config alone cannot express
+│   │   ├── ollama.sh                  # start the daemon, pull the tags
+│   │   └── runpod.sh                  # probe the pod, generate its catalog
+│   ├── dev-local.sh                   # thin shim → dev.sh ollama
+│   ├── dev-runpod.sh                  # thin shim → dev.sh runpod
 │   ├── provision.sh                   # one-shot fresh-VM setup (idempotent)
 │   ├── install-nvidia.sh              # driver + CUDA, skipped if nvidia-smi already works
 │   ├── mount-data-disk.sh             # format + fstab by UUID → /mnt/models

@@ -29,4 +29,4 @@ jobs:
       # Provisioning scripts get re-run on half-configured VMs; a warning here is
       # a footgun there. Warnings fail the build.
       - name: Lint scripts
-        run: shellcheck --severity=warning --shell=bash scripts/*.sh
+        run: shellcheck --severity=warning --shell=bash scripts/*.sh scripts/profiles/*.sh
