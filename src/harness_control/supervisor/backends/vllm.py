@@ -50,7 +50,10 @@ class VllmBackend:
         self._binary = binary
         self._port = port
         self._host = host
-        self._logbuf = logbuf or LogBuffer()
+        # `is None`, not `or`: LogBuffer defines __len__, so a *fresh* buffer is
+        # falsy and `or` would silently discard the one the caller passed —
+        # which is exactly how vLLM's stdout ended up in an orphan buffer.
+        self._logbuf = LogBuffer() if logbuf is None else logbuf
         self._client = client or httpx.AsyncClient(timeout=5.0)
         self._owns_client = client is None
         self._proc: asyncio.subprocess.Process | None = None

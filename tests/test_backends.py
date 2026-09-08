@@ -23,6 +23,7 @@ import pytest_asyncio
 from conftest import API_KEY, REMOTE_API_KEY, LiveServer
 from fake_upstream import DEFAULT_MODEL, FakeUpstream
 from harness_control.catalog import ModelSpec
+from harness_control.logbuf import LogBuffer
 from harness_control.settings import Settings
 from harness_control.supervisor.backends import (
     BACKENDS,
@@ -160,6 +161,43 @@ def test_every_documented_backend_is_registered() -> None:
 def test_an_unknown_backend_is_a_clear_error() -> None:
     with pytest.raises(UnknownBackendError, match="unknown backend 'sagemaker'"):
         create_backend("sagemaker", Settings())
+
+
+def test_the_registry_hands_the_log_buffer_to_the_engine_that_pumps(
+    settings: Settings,
+) -> None:
+    """The buffer `/admin/logs` serves must be the one vLLM's stdout lands in.
+
+    This is the wiring, not the pump. `_pump_output` was always tested — but the
+    factory built `VllmBackend` without a buffer, so it made a private one, filled
+    it faithfully, and nothing could read it. `/admin/logs` showed the
+    supervisor's buffer: a different object, containing only the control plane's
+    own lines.
+
+    The cost was paid on a real GPU: a vLLM that stalled during its first load was
+    undiagnosable from the API, at exactly the moment the desktop app offers
+    "View server logs". Asserting object identity is the whole test, because
+    identity is the whole bug.
+    """
+    buf = LogBuffer()
+    backend = create_backend("vllm", settings, buf)
+    assert backend.logbuf is buf  # type: ignore[attr-defined]
+
+
+def test_every_backend_accepts_the_buffer_whether_or_not_it_uses_one(
+    settings: Settings,
+) -> None:
+    """A uniform factory signature is what keeps `create_backend` backend-agnostic."""
+    buf = LogBuffer()
+    for name in backend_names():
+        if name == "vllm":
+            continue  # built above; constructing another would want a binary
+        assert create_backend(name, settings, buf) is not None
+
+
+def test_the_buffer_is_optional(settings: Settings) -> None:
+    """Callers that have no buffer still get a working backend."""
+    assert create_backend("vllm", settings).logbuf is not None  # type: ignore[attr-defined]
 
 
 def test_the_registry_builds_every_backend(settings: Settings) -> None:

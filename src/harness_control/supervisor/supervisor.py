@@ -89,7 +89,10 @@ class Supervisor:
         self._progress_hint: str | None = None
         #: What a switch is loading, for the Retry-After estimate.
         self._pending_model_id: str | None = None
-        self._logbuf = logbuf or LogBuffer()
+        # `is None`, not `or`: LogBuffer defines __len__, so a *fresh* buffer is
+        # falsy and `or` would silently discard the one the caller passed —
+        # which is exactly how vLLM's stdout ended up in an orphan buffer.
+        self._logbuf = LogBuffer() if logbuf is None else logbuf
 
     # ------------------------------------------------------------- reading
 
@@ -504,7 +507,9 @@ class Supervisor:
         """One backend instance per activation, so a switch cannot inherit state."""
         if self._factory is not None:
             return self._factory(spec.backend, self._settings)
-        return create_backend(spec.backend, self._settings)
+        # Our buffer, not a fresh one: this is what `/admin/logs` serves, and a
+        # backend that pumps an engine's stdout must write into it.
+        return create_backend(spec.backend, self._settings, self._logbuf)
 
     def _transition(self, target: ModelState) -> None:
         check_transition(self._state, target)

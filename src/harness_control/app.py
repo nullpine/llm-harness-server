@@ -40,7 +40,11 @@ def create_app(
     configure_logging(settings.log_level, settings.api_key)
 
     if supervisor is None:
-        catalog = catalog or _load_catalog_or_die(settings)
+        # `is None` for the same reason as the log buffers: Catalog defines
+        # __len__, so an empty one is falsy and would be silently swapped for
+        # whatever is on disk.
+        if catalog is None:
+            catalog = _load_catalog_or_die(settings)
         supervisor = Supervisor(catalog, settings)
 
     app = FastAPI(
