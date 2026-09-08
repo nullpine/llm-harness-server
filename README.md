@@ -1,167 +1,367 @@
 # llm-harness-server
 
-The server side of LLM Harness: a small FastAPI control plane that keeps exactly
-one model serving at a time and puts auth, model switching, and honest state in
-front of it. The client is
+A small FastAPI **control plane** that keeps exactly one model serving at a time
+and puts auth, model switching, and honest state in front of whatever is doing
+the inference. The client is
 [`llm-harness-desktop`](https://github.com/nullpine/llm-harness-desktop).
 
-The inference engine is pluggable. **Today it runs Ollama on an Apple Silicon Mac
-— no cloud, no cost.** The vLLM backend is implemented and tested; what is missing
-for an Azure H100 deployment is the provisioning tooling, not the code. The HTTP
-contract is identical either way — see `docs/BACKENDS.md` and
-`docs/adr/0007-pluggable-inference-backends.md`.
+The engine is pluggable and the HTTP contract does not change when you swap it.
+The same desktop build talks to Ollama on a laptop, vLLM on a rented GPU, or a
+hosted provider — that interchangeability is the point of the whole design.
 
-## Quick start
+```bash
+make profile          # which deployment am I pointed at?
+make dev              # run it
+./scripts/smoke.sh    # prove it works, L1-L11
+```
 
-Requires an Apple Silicon Mac with **48 GB unified memory** — both catalog models
-run at 4-bit — and [Ollama](https://ollama.com/download).
+---
+
+## 1. Architecture
+
+Four layers. Each owns one thing, and the boundaries are enforced by tests.
+
+```
+┌─ desktop app ──────────────────────────────────────────────────────────┐
+│  holds conversation history; knows only the HTTP contract              │
+└───────────────────────────┬────────────────────────────────────────────┘
+                            │  Authorization: Bearer <HARNESS_API_KEY>
+┌───────────────────────────▼──── control plane (this repo) ─────────────┐
+│                                                                        │
+│  auth.py         bearer token, constant-time compare, every route      │
+│                  except GET /healthz                                   │
+│                                                                        │
+│  routes/         /v1/*        OpenAI-compatible surface                │
+│                  /admin/*     state, models, jobs, logs                │
+│                                                                        │
+│  proxy.py        the streaming relay. Raw bytes in, raw bytes out.     │
+│                  Never parses the stream. Cancels upstream on abort.   │
+│                                                                        │
+│  supervisor/     THE BRAIN. Owns the state machine, the activation     │
+│                  lock, the drain, the job registry, the watchdog.      │
+│                  Decides state; backends only report facts.            │
+│                                                                        │
+│  catalog.py      models.yaml → validated ModelSpec. Invalid catalog    │
+│                  is a hard startup failure, never a partial load.      │
+│                                                                        │
+│  backends/       ollama │ vllm │ remote_openai                         │
+│                  "how a model is made to serve", and nothing else      │
+└───────────────────────────┬────────────────────────────────────────────┘
+                            │  plain OpenAI HTTP, no auth on local paths
+┌───────────────────────────▼────────────────────────────────────────────┐
+│  the engine: ollama daemon │ our vLLM process │ someone else's HTTPS   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### The supervisor owns state; backends never do
+
+This split is the load-bearing idea. A backend answers "make this model serve",
+"is it healthy", "is what you held released yet" — and nothing more. It never
+sets state, never decides policy, never knows the state machine exists.
+
+Everything else stays central, so it behaves identically on every backend: the
+state machine, the activation lock (one switch at a time), the drain of in-flight
+requests, the job registry, and the watchdog that notices a dead engine within
+seconds.
+
+The rule has teeth: `tests/test_backends.py` runs one shared contract suite
+against *every* registered backend, and a test greps the source to fail the build
+if `if backend.name == …` appears anywhere outside `backends/`. If a caller needs
+to know which backend it has, the interface is missing a method — that is how
+`upstream_headers()` came to exist rather than a branch in the proxy.
+
+### The state machine
+
+```
+idle ──activate──▶ loading ──ready?──▶ ready ──activate──▶ stopping ──▶ loading
+  ▲                   │                  │                                 │
+  └───────────────────┴── failure ───────┴──▶ error ◀──────────────────────┘
+```
+
+`error` is terminal until a client activates something. There is no automatic
+retry and no crash-loop restart — a model that fails to load will fail the same
+way in three seconds, and a restart loop turns one clear error into a scrolling
+log (ADR-0005).
+
+### The three backends
+
+| | `ollama` | `vllm` | `remote_openai` |
+|---|---|---|---|
+| Where | local daemon | our own process | someone else's HTTPS |
+| activate | preload, pin with `keep_alive: -1` | spawn `vllm serve` as a process group | verify it appears in `/v1/models` |
+| stop | `keep_alive: 0` | SIGTERM the **group**, then SIGKILL | nothing was acquired |
+| released? | poll `/api/ps` until the tag is gone | poll `nvidia-smi` until VRAM returns | no-op |
+| GPU info | `[]` (Apple Silicon) | `nvidia-smi` | `[]` — not our hardware |
+| Status | the MVP path | implemented, **never run on a GPU** | verified against a real pod |
+
+There are exactly three and there is no fourth. RunPod is not a backend — it is a
+*deployment* of `remote_openai`, the same code path a hosted provider uses.
+
+---
+
+## 2. Deployment options
+
+A **profile** is one deployment. Two halves, because the three differ in *work*,
+not only in values:
+
+- `deploy/profiles/<name>.env` — configuration, literal `KEY=value`, **no secrets**
+- `scripts/profiles/<name>.sh` — the setup config cannot express (optional)
+
+| Profile | Backend | Runs on | Cost | Status |
+|---|---|---|---|---|
+| `ollama` | `ollama` | this Mac, 48 GB | free | ✅ L1–L11 green |
+| `runpod` | `remote_openai` | rented GPU pod | ~$3.52/hr | ✅ L1–L11 green |
+| `vllm` | `vllm` | a CUDA host | varies | ⚠️ config only — nothing to run it on |
+
+```bash
+make profile              # show the active one and what exists
+make profile runpod       # switch
+make dev                  # run the active one
+make dev PROFILE=ollama   # override for a single run
+```
+
+**Precedence**, strongest first: your shell environment → `.env.local` → the
+profile file. So `HARNESS_PORT=8188 make dev` wins over both, and secrets live in
+gitignored `.env.local` and never in a committed file.
+
+Profiles stay literal with no shell expansion so the same file is valid as a
+systemd `EnvironmentFile=` on a real host.
+
+### `ollama` — local, free
 
 ```bash
 brew install ollama
-./scripts/dev-local.sh
+make profile ollama && make dev
 ```
 
-The script starts the Ollama daemon with `OLLAMA_MAX_LOADED_MODELS=1` (without it
-Ollama holds three models at once and quietly breaks the one-model rule), pulls any
-missing weights, generates an API key into `.env.local` on first run, and serves
-the control plane on `http://127.0.0.1:8080`. It prints a ready-to-paste `curl -N`
-streaming command. Re-running it is safe.
-
-To check the whole thing actually works:
-
-```bash
-./scripts/smoke.sh                 # L1–L11, one pass/fail line each
-./scripts/smoke.sh --disruptive    # also kills the daemon, to prove recovery
-```
-
-In the desktop app, set Server URL to `http://localhost:8080` and paste the key.
-Nothing else differs from a cloud deployment.
-
-```
-desktop app ──HTTP──▶ 127.0.0.1:8080 control plane ──▶ 127.0.0.1:11434 ollama
-                            │                                  │
-                       models.yaml                     ~/.ollama/models
-```
-
-## The model catalog
+Starts the daemon with `OLLAMA_MAX_LOADED_MODELS=1` — without it Ollama holds
+three models at once and quietly breaks the one-model invariant on a machine with
+enough RAM to hide it — pulls missing weights, generates an API key into
+`.env.local`, and serves on `http://127.0.0.1:8080`.
 
 | id | Ollama tag | Shape | Context |
 |---|---|---|---|
 | `glm-4.7-flash` | `glm-4.7-flash:q4_K_M` | 30B-A3B MoE, ~18 GB | 32k |
 | `qwen3.8-27b` | `qwen3.8:27b-q4_K_M` | 27B dense, ~16 GB | 32k |
 
-Both fit in 48 GB at once — which is exactly why the supervisor *verifies* the old
-one unloaded before loading the next, rather than trusting that it did. Adding a
-model is an entry in `deploy/config/models.yaml` plus a weight pull; no code change.
+Both fit in 48 GB *at once* — which is exactly why the supervisor **verifies** the
+old one unloaded rather than trusting that it did. With room to spare there is no
+memory pressure to reveal a leak; the invariant would simply become quietly false.
 
-On a GPU these become the FP8 weights (`zai-org/GLM-4.7-Flash`,
-`Qwen/Qwen3.8-27B-FP8`) with the same ids. The flagship GLM-5.x and Qwen3.8-Max
-weights are 750B–2.4T parameters and need 8–32 GPUs; out of scope for this
-hardware, see `docs/SPEC.md` §4.2.
+### `runpod` — a rented GPU
 
-## What it adds on top of the engine
+The pod runs vLLM itself, so we do not own a process — hence `remote_openai`. The
+control plane runs on your machine and proxies to the pod.
 
-Ollama and vLLM both already speak OpenAI. Neither authenticates clients, and
-neither will tell you honestly what it is doing while it changes model. This
-control plane does both:
-
-- Bearer-token auth on every route, constant-time compared
-- A supervisor that drains in-flight requests, stops the current model, **verifies
-  the memory was actually released**, starts the next one, and reports honest state
-  throughout — 503 with `Retry-After` while loading, never a hang
-- A true streaming proxy — no buffering anywhere in the chain
-- Enough operational surface (`/admin/state`, `/admin/logs`) that the desktop app
-  can tell you *why* a load failed, without anyone opening a shell
-
-## Development (no GPU required)
-
-The entire test suite runs without a GPU and without a daemon — `tests/fake_upstream.py`
-stands in for the engine.
-
-```bash
-make test       # pytest
-make lint       # ruff + ruff format --check + mypy --strict
-make fmt        # ruff format + safe autofixes
-make dev        # scripts/dev-local.sh — the real local stack
-make smoke HOST=http://127.0.0.1:8080
+```
+desktop ──▶ 127.0.0.1:8080 control plane ──HTTPS──▶ <pod>-8000.proxy.runpod.net
+            HARNESS_API_KEY                          HARNESS_REMOTE_API_KEY
 ```
 
-## The Azure GPU path — the code exists, the provisioning does not
+```bash
+export RUNPOD_POD_ID=<pod id>          # or HARNESS_REMOTE_BASE_URL=https://…
+# HARNESS_REMOTE_API_KEY=<the pod's --api-key>   ← put this in .env.local
+make profile runpod && make dev
+```
 
-There is no GPU quota, so this has never run on hardware. Two different things are
-missing, and they are missing to very different degrees.
+The setup hook asks the pod what it serves at `/v1/models` and generates
+`.local/models.runpod.yaml` from the answer — `model_ref` must be exactly the name
+the engine answers to, and the pod is the only authority on that. The catalog is
+generated, never committed: it describes one pod serving one model, and both
+change every deployment.
 
-**The `vllm` backend is real code.** `supervisor/backends/vllm.py` is 278 lines
-implementing the same `Backend` interface as `ollama` — spawn with a process
-group, SIGTERM then SIGKILL the group, wait for the port, wait for VRAM, parse the
-load progress out of the log. `tests/test_backends.py` runs the shared contract
-suite against **every registered backend**, `vllm` included, and adds six
-vllm-specific tests; the fake upstream doubles as a stand-in `vllm` binary, so the
-spawn, the process-group kill and the port-free wait are exercised as real code
-paths. Even the `nvidia-smi` parser has a unit test against a real row.
+**Two keys, and they are not interchangeable.** `HARNESS_API_KEY` authenticates
+the desktop app to us and stops at `auth.py`. `HARNESS_REMOTE_API_KEY`
+authenticates *us* to the pod. Forwarding ours upstream would leak it.
 
-What no test can reach: vLLM's actual CLI accepting those flags, real weights
-loading, and `wait_for_vram_release` watching VRAM genuinely come back. That is
-what "not exercised until GPU quota exists" means — not that the code is a sketch.
+**Limitation:** one pod serves one model, so switching between catalog entries is
+instant and does nothing. Real switching needs a pod per model, or the control
+plane running inside the pod on the `vllm` backend. Neither is built.
 
-**The deployment tooling does not exist.** `scripts/provision.sh`, `vm-start.sh`,
-`vm-stop.sh`, `rotate-key.sh`, `download-models.sh`, `install-nvidia.sh`,
-`mount-data-disk.sh` and `tail-logs.sh` are **two-line stubs**. `docs/DEPLOY.md` is
-one line. In `deploy/`, only `caddy/Caddyfile.template` has content — the systemd
-unit, the logrotate config and the env example are empty files. Nothing here is
-written-but-unrun; it is unwritten.
+### `vllm` — our own process on a GPU host
 
-`docs/BACKENDS.md` §4.1 is the migration when quota arrives; `docs/BACKLOG.md`
-tracks the tooling under *M4 (Azure, deferred)*. Deliberate scope, not unfinished
-work — but there is no script to run today.
+Configuration only. The backend is real code — process-group spawn and kill, port
+wait, VRAM wait, progress parsing — and passes the shared contract suite plus six
+vllm-specific tests, with the fake upstream standing in for the binary. What no
+test can reach is vLLM's own CLI accepting the flags, real weights loading, and
+`wait_for_vram_release` watching VRAM genuinely come back.
 
-The intended shape:
+The profile has no setup hook because the setup *is* provisioning, and
+`scripts/provision.sh` is a deferred M4 stub. Intended shape:
 
 ```
 Internet ──HTTPS:443──▶ Caddy ──▶ 127.0.0.1:8080 control plane ──▶ 127.0.0.1:8000 vLLM
 ```
 
-Only 443 open; the engine never reachable from outside the VM.
+Only 443 open; the engine never reachable from outside the host.
 
-> ### 💸 Before provisioning anything, the cost
->
-> | | $/hr | 3 hr/day | 24/7 |
-> |---|---:|---:|---:|
-> | H100 on-demand | $6.98 | $628/mo | $5,095/mo |
-> | **H100 spot** ← default | **$1.29** | **$116/mo** | $942/mo |
->
-> None of this applies to the local path above, which costs nothing.
->
-> One person chatting uses ~1–3 % of an H100. The same models from a hosted API run
-> about $2–20/month for heavy personal use. Self-host when you need tenant
-> isolation, a pinned model version, or the harness itself — not to save money. See
-> `docs/adr/0006-spot-instances-and-cost.md`.
->
-> When it is written, `provision.sh` will default to **Spot**, and `vm-stop.sh`
-> will deallocate the VM. Until then the cost of this path is zero, because it
-> cannot be started.
+---
 
-## Documentation
+## 3. The client contract
+
+`docs/API-CONTRACT.md` is authoritative and is **byte-identical** to the copy in
+the desktop repo. Changing it means a PR in both repos and a version bump. This
+section summarises; it does not replace it.
+
+### Transport
 
 | | |
 |---|---|
-| `docs/SPEC.md` | the MVP spec, hardware plan, and acceptance criteria |
-| `docs/API-CONTRACT.md` | the HTTP surface (byte-identical copy in the desktop repo) |
-| `docs/BACKENDS.md` | the `Backend` interface, the three implementations, and how to migrate |
-| `docs/OPERATIONS.md` | the local runbook: startup refusals, stuck loads, a daemon that died |
+| Auth | `Authorization: Bearer <key>` on every route except `GET /healthz` |
+| Content type | `application/json`, or `text/event-stream` when streaming |
+| Client identity | `X-Harness-Client: llm-harness-desktop/<semver>` (informational) |
+
+### Every error uses one envelope
+
+Never FastAPI's default `{"detail": …}`:
+
+```json
+{ "error": { "code": "model_not_active", "message": "human readable", "details": {} } }
+```
+
+Codes: `unauthorized`, `forbidden`, `not_found`, `model_not_active`,
+`model_loading`, `activation_in_progress`, `activation_failed`,
+`upstream_unavailable`, `bad_request`, `internal`.
+
+### State decides what `/v1/chat/completions` does
+
+| State | Meaning | Behaviour |
+|---|---|---|
+| `idle` | nothing loaded | 409 `model_not_active` |
+| `loading` | weights loading | 503 `model_loading` + `Retry-After` |
+| `ready` | serving | normal |
+| `stopping` | draining before a switch | 503 `model_loading` + `Retry-After` |
+| `error` | last activation failed | 409 `model_not_active`, see `last_error` |
+
+It never hangs and never 500s while switching. `Retry-After` is the *incoming*
+model's estimate, not the outgoing one — answering with the wrong one sends the
+client back three times too early.
+
+### Rules a client must follow
+
+- **Correlate by your own request, never by the frame's `model` field.** Frames
+  are relayed verbatim, so `model` carries the *engine's* name (`zai-org/GLM-4.7-Flash`,
+  `glm-4.7-flash:q4_K_M`) rather than the catalog id you asked for. Rewriting it
+  would mean parsing and re-serialising the stream, which is exactly the buffering
+  the relay exists to prevent.
+- **Tolerate both reasoning spellings** — `delta.reasoning_content` (vLLM) and
+  `delta.reasoning` (Ollama).
+- **Never auto-retry a stream that already emitted tokens.**
+- Poll `/admin/state` every 2 s during a load, up to 15 min; 60 s idle timeout
+  between SSE chunks; no total timeout on a completion — a long answer is not a
+  hung one.
+
+### Routes
+
+| | |
+|---|---|
+| `GET /healthz` | unauthenticated; reveals no model or key info |
+| `GET /v1/models` | the catalog, as OpenAI shapes it |
+| `POST /v1/chat/completions` | streaming and non-streaming |
+| `GET /admin/state` | state, active model, progress hint, last error, GPU |
+| `GET /admin/models` | catalog + per-model availability |
+| `POST /admin/models/{id}/activate` | 202 + job, or 409 if one is in flight |
+| `GET /admin/jobs/{id}` | activation progress |
+| `GET /admin/logs` | ring buffer, API key redacted |
+
+---
+
+## 4. Invariants that must not break
+
+Each of these is defended in more than one place, because each fails *silently*.
+
+**Exactly one model serves.** Every spawn and kill goes through
+`backends/vllm.py`; no `subprocess.Popen` anywhere else in the package. Ollama is
+pinned to one loaded model at the daemon, asserted at startup.
+
+**Nothing buffers the stream.** `httpx` iterated with `aiter_raw()` — never
+`aiter_text` or `.json()`; no compression middleware on `/v1/*`; Caddy
+`flush_interval -1` where Caddy exists; and `tests/test_proxy_streaming.py`
+asserts inter-chunk *arrival times*, not just content. A test that concatenates
+the body and compares strings passes happily while streaming is completely broken.
+
+**VRAM is actually released before the next load.** Process-group kill,
+`KillMode=control-group` in the systemd unit, and `wait_for_vram_release()`
+polling `nvidia-smi`. A vLLM process that survives a restart holds 30+ GB and the
+next load OOMs.
+
+> **Known gap.** SPEC §5.2 also requires killing any orphan holding the engine's
+> port at startup. `kill_orphan_on_port()` in `backends/vllm.py` implements it,
+> but nothing calls it — it has no callers and no tests. `docs/BACKLOG.md` tracks
+> it under *M4*. It only bites on the `vllm` backend, which has no hardware yet.
+
+**No secrets in the repo.** Keys live in gitignored `.env.local`; profiles carry
+none. The logging filter scrubs the key from every record, with a test.
+
+---
+
+## 5. Development
+
+The entire suite runs **without a GPU and without a daemon** —
+`tests/fake_upstream.py` stands in for whatever is serving.
+
+```bash
+make test       # pytest
+make lint       # ruff + ruff format --check + mypy --strict
+make fmt        # ruff format + safe autofixes
+make dev        # the active profile
+make smoke HOST=http://127.0.0.1:8080
+```
+
+`./scripts/smoke.sh` exercises acceptance criteria L1–L11 against a *running*
+deployment, one pass/fail line each, non-zero exit on failure. Criteria that
+cannot apply are printed as loud SKIPs rather than silently passing — a
+single-model deployment skips the four switch criteria.
+
+---
+
+## 6. Cost
+
+The `ollama` profile costs nothing. The rest:
+
+| | $/hr | 3 hr/day | Stopped |
+|---|---:|---:|---:|
+| RunPod H100 SXM 80GB | $3.52 | $317/mo | $0.024/hr storage |
+| Azure H100 on-demand | $6.98 | $628/mo | — |
+| Azure H100 spot | $1.29 | $116/mo | — |
+
+Stopping a RunPod pod cuts the bill by 99.3% — the GPU is the entire cost and
+storage is rounding error. It bills whether or not anything is talking to it, and
+Ctrl-C on the control plane does **not** stop it.
+
+One person chatting uses ~1–3% of an H100. The same models from a hosted API run
+$2–20/month for heavy personal use. Self-host for tenant isolation, a pinned model
+version, or the harness itself — not to save money (ADR-0006).
+
+---
+
+## 7. Security posture (MVP)
+
+A single shared API key, one user, one client. Locally everything binds
+`127.0.0.1` and nothing leaves the machine. On the RunPod path the pod is a public
+HTTPS endpoint and its bearer token is the only thing in front of your GPU — set
+one.
+
+Explicitly **not** built, and deliberately so: per-user identity, quotas, and
+usage tracking. Any key holder can also switch the model for everyone, since one
+key opens both `/v1` and `/admin`. Multi-user via Entra ID is a post-MVP
+*replacement*, not a layer to hack on later (ADR-0004).
+
+---
+
+## 8. Documentation
+
+| | |
+|---|---|
+| `docs/SPEC.md` | the MVP spec, hardware plan, acceptance criteria |
+| `docs/API-CONTRACT.md` | the HTTP surface — byte-identical copy in the desktop repo |
+| `docs/BACKENDS.md` | the `Backend` interface, the three implementations, migration |
+| `docs/PROJECT-STRUCTURE.md` | where things go |
+| `docs/OPERATIONS.md` | the local runbook: startup refusals, stuck loads, a dead daemon |
 | `docs/BACKLOG.md` | what is done, what is deferred, and why |
 | `docs/adr/` | why one model at a time, why no crash-loop restart, why pluggable backends |
-| `docs/DEPLOY.md` | *stub* — the Azure runbook, unwritten because the provisioning is |
+| `docs/DEPLOY.md` | *stub* — unwritten, because the provisioning is |
 | `CLAUDE.md` | working instructions for AI contributors |
-
-## Security posture (MVP)
-
-A single shared API key, one user, one client. Locally everything is bound to
-`127.0.0.1` and nothing leaves the machine; on the deployed path it would be HTTPS
-only, the NSG restricted to one IP, and the engine bound to localhost. That is
-appropriate for one person and nothing more. Multi-user identity via Entra ID is a
-post-MVP *replacement*, not a layer to hack on later — see
-`docs/adr/0004-api-key-auth-for-mvp.md`.
 
 ## License
 
