@@ -33,6 +33,15 @@ SIGKILL_GRACE_S = 15.0
 PORT_FREE_TIMEOUT_S = 30.0
 
 
+#: How much of vLLM's stdout to take per read. Any size works; this one keeps a
+#: chatty startup to a handful of reads without holding much in memory.
+_PUMP_CHUNK_BYTES = 8192
+
+#: A "line" longer than this is flushed as-is. Guards against output that never
+#: emits a separator at all, which would otherwise grow `pending` unboundedly.
+_PUMP_MAX_LINE_CHARS = 16384
+
+
 class VllmBackend:
     """Owns exactly one `vllm serve` process group at a time."""
 
@@ -50,7 +59,10 @@ class VllmBackend:
         self._binary = binary
         self._port = port
         self._host = host
-        self._logbuf = logbuf or LogBuffer()
+        # `is None`, not `or`: LogBuffer defines __len__, so a *fresh* buffer is
+        # falsy and `or` would silently discard the one the caller passed —
+        # which is exactly how vLLM's stdout ended up in an orphan buffer.
+        self._logbuf = LogBuffer() if logbuf is None else logbuf
         self._client = client or httpx.AsyncClient(timeout=5.0)
         self._owns_client = client is None
         self._proc: asyncio.subprocess.Process | None = None
@@ -216,17 +228,42 @@ class VllmBackend:
             await asyncio.sleep(0.5)
 
     async def _pump_output(self, proc: asyncio.subprocess.Process) -> None:
-        """Feed vLLM's stdout into the ring buffer for `/admin/logs` and the journal."""
+        """Feed vLLM's stdout into the ring buffer for `/admin/logs` and the journal.
+
+        Reads fixed-size chunks rather than lines, and this is not a style choice.
+        `StreamReader.readline()` raises `ValueError` once a line exceeds the
+        stream limit — 64 KiB for `create_subprocess_exec`. vLLM's progress bars
+        are tqdm output that redraws with `\r` and no newline, and its startup
+        config dump is one enormous line, so both can cross that limit. The raise
+        would kill this task, nothing would drain the OS pipe, and vLLM would
+        **block on write forever** — a hang, not a crash, and therefore the worst
+        possible failure: the supervisor sees an engine that never becomes ready
+        and no error anywhere.
+
+        Splitting on `\r` as well as `\n` is what turns those redrawing bars into
+        readable progress lines instead of one unbounded blob.
+        """
         stream = proc.stdout
         if stream is None:  # pragma: no cover - we always ask for a pipe
             return
+        pending = ""
         while True:
-            raw = await stream.readline()
-            if not raw:
-                return
-            line = raw.decode("utf-8", errors="replace").rstrip("\n")
-            self._logbuf.append(line)
-            log.debug("vllm: %s", line)
+            chunk = await stream.read(_PUMP_CHUNK_BYTES)
+            if not chunk:
+                break
+            pending += chunk.decode("utf-8", errors="replace")
+            pending = pending.replace("\r\n", "\n")
+            *complete, pending = pending.replace("\r", "\n").split("\n")
+            for line in complete:
+                if line:
+                    self._logbuf.append(line)
+                    log.debug("vllm: %s", line)
+            # A stream that never emits a separator must not grow without bound.
+            if len(pending) > _PUMP_MAX_LINE_CHARS:
+                self._logbuf.append(pending[:_PUMP_MAX_LINE_CHARS])
+                pending = ""
+        if pending:
+            self._logbuf.append(pending)
 
 
 async def _port_in_use(host: str, port: int) -> bool:
